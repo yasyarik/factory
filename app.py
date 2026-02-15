@@ -854,9 +854,12 @@ def linkedin_callback(code: str | None = None, state: str | None = None, error: 
 
     if not access_token:
         raise HTTPException(status_code=400, detail=f"No access_token returned: {data}")
-
-    member_id = linkedin_get_member_id(access_token=access_token)
-    member_urn = f"urn:li:person:{member_id}"
+    member_urn_env = (os.environ.get("LINKEDIN_PERSON_URN") or os.environ.get("LI_PERSON_URN") or "").strip() or None
+    if member_urn_env:
+        member_urn = member_urn_env
+    else:
+        member_id = linkedin_get_member_id(access_token=access_token)
+        member_urn = f"urn:li:person:{member_id}"
 
     org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip() or None
 

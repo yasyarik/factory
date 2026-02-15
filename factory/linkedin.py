@@ -57,12 +57,10 @@ def _truncate_to(s: str, max_len: int) -> str:
 
 
 def linkedin_scopes(mode: str = 'member') -> str:
-    # Keep scopes minimal so OAuth succeeds with default app permissions.
-    # Add org scope only when explicitly requested.
-    scopes = [
-        'r_liteprofile',
-                'w_member_social',
-    ]
+    # Keep scopes minimal to avoid app-permission issues.
+    # For posting as a member we need w_member_social.
+    # For posting as an organization we need w_organization_social (and you must have page admin rights).
+    scopes = ['w_member_social']
     if (mode or '').lower().strip() == 'org':
         scopes.append('w_organization_social')
     return ' '.join(scopes)
