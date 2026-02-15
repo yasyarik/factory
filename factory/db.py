@@ -58,6 +58,31 @@ def db_init(path: str) -> None:
             "CREATE INDEX IF NOT EXISTS job_logs_job_ts_idx ON job_logs(job_id, ts);"
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS linkedin_auth (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              access_token TEXT,
+              refresh_token TEXT,
+              expires_at TEXT,
+              member_urn TEXT,
+              org_urn TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS oauth_states (
+              provider TEXT NOT NULL,
+              state TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS oauth_states_provider_created_idx ON oauth_states(provider, created_at);"
+        )
+
 
 @contextmanager
 def db_connect(path: str):
