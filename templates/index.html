@@ -127,6 +127,23 @@
         <div class="muted" style="margin-top: 10px;">Tip: set `GEMINI_API_KEY` in the factory process env to enable AI generation. Without it, we generate a deterministic placeholder draft (for pipeline testing).</div>
       </div>
 
+      <div class="panel" id="liPanel">
+        <div class="row" style="justify-content: space-between;">
+          <div style="font-weight: 950; letter-spacing: -0.01em;">LinkedIn</div>
+          <div class="muted" id="liStatusText">Loading...</div>
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <select id="liAs" style="width: 190px">
+            <option value="member" selected>Creator</option>
+            <option value="org">Company Page</option>
+          </select>
+          <input id="liOrgUrn" style="flex: 1; min-width: 320px" placeholder="Org URN (urn:li:organization:123456)" />
+          <button class="primary" id="liConnectBtn">Connect</button>
+          <button class="warn" id="liDisconnectBtn">Disconnect</button>
+        </div>
+        <div class="muted" style="margin-top: 10px;">Posts use the article hero image and an auto-generated summary under 3000 characters.</div>
+      </div>
+
             <div class="panel">
         <div class="row">
           <input id="importSlug" list="importList" style="flex: 1; min-width: 260px" placeholder="Import existing post (slug or URL)" />
@@ -238,6 +255,73 @@
         return 'new';
       }
 
+      var _li = { connected: false, memberUrn: null, orgUrn: null, orgUrnConfigured: false };
+
+      async function loadLinkedInStatus() {
+        try {
+          var s = await api('/api/linkedin/status');
+          if (s && s.success) {
+            _li.connected = !!s.connected;
+            _li.memberUrn = s.memberUrn || null;
+            _li.orgUrn = s.orgUrn || null;
+            _li.orgUrnConfigured = !!s.orgUrnConfigured;
+          }
+        } catch (e) {}
+
+        var t = el('liStatusText');
+        if (t) t.textContent = _li.connected ? ('Connected: ' + (_li.memberUrn || 'member')) : 'Not connected';
+
+        var orgInput = el('liOrgUrn');
+        if (orgInput) {
+          if (_li.orgUrn) orgInput.value = _li.orgUrn;
+          orgInput.disabled = _li.orgUrnConfigured;
+        }
+
+        var dc = el('liDisconnectBtn');
+        if (dc) dc.disabled = !_li.connected;
+      }
+
+      function linkedinConnect() {
+        window.location.href = resolveUrl('/linkedin/connect');
+      }
+
+      async function linkedinDisconnect() {
+        if (!confirm('Disconnect LinkedIn?')) return;
+        await api('/api/linkedin/disconnect', { method: 'POST' });
+        await loadLinkedInStatus();
+      }
+
+      async function linkedinPublish(jobId) {
+        if (!_li.connected) {
+          alert('LinkedIn is not connected');
+          return;
+        }
+
+        var modeEl = el('liAs');
+        var mode = (modeEl && modeEl.value) ? modeEl.value : 'member';
+        var body = { as: mode };
+
+        if (mode === 'org') {
+          var org = (el('liOrgUrn') && el('liOrgUrn').value) ? el('liOrgUrn').value.trim() : '';
+          if (org) body.orgUrn = org;
+        }
+
+        try {
+          var out = await api('/api/jobs/' + encodeURIComponent(jobId) + '/linkedin/publish', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          });
+          if (out && out.success) {
+            alert('Posted to LinkedIn');
+          } else {
+            alert((out && out.error) ? out.error : 'LinkedIn publish failed');
+          }
+        } catch (e) {
+          alert('LinkedIn publish failed');
+        }
+      }
+
       function escapeHtml(v) {
         var str = String(v == null ? '' : v);
         return str
@@ -309,6 +393,7 @@
           var canPreview = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
           var canPublish = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
           var canEdit = (status !== 'NEW');
+          var canLinkedIn = (!isGenerating) && (_li && _li.connected) && (status === 'READY' || status === 'PUBLISHED');
 
           var err = j.error ? '<div class="err" style="margin-top:6px;">' + escapeHtml(j.error) + '</div>' : '';
 
@@ -327,6 +412,7 @@
             + '<button ' + (canGenerate ? '' : 'disabled') + ' onclick="generateJob(\'' + escapeHtml(j.id) + '\', \'' + escapeHtml(status) + '\')">' + genLabel + '</button>'
             + '<button ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
             + '<button class="good" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
+            + '<button ' + (canLinkedIn ? '' : 'disabled') + ' onclick="linkedinPublish(\'' + escapeHtml(j.id) + '\')">LinkedIn</button>'
             + '<button ' + (canEdit ? '' : 'disabled') + ' onclick="openEdit(\'' + escapeHtml(j.id) + '\')">Edit</button>'
             + '<button class="warn" onclick="deleteJob(\'' + escapeHtml(j.id) + '\')">Delete</button>'
             + '<button onclick="openLogs(\'' + escapeHtml(j.id) + '\')">Logs</button>'
@@ -496,6 +582,10 @@
 
 el('createBtn').addEventListener('click', createJob);
       el('importBtn').addEventListener('click', importPost);
+
+      if (el('liConnectBtn')) el('liConnectBtn').addEventListener('click', linkedinConnect);
+      if (el('liDisconnectBtn')) el('liDisconnectBtn').addEventListener('click', linkedinDisconnect);
+      loadLinkedInStatus();
 
       el('refreshBtn').addEventListener('click', function() {
         loadPostSuggestions();

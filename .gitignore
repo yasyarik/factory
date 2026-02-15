@@ -20,3 +20,9 @@ factory.sqlite
 
 # Logs
 *.log
+
+# Secrets
+.env
+
+.venv/
+venv/

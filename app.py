@@ -5,12 +5,12 @@ import difflib
 import sqlite3
 import secrets
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from factory.db import db_init, db_connect, log_event
@@ -28,6 +28,17 @@ from factory.generate import generate_draft
 from factory.validate import validate_draft
 from factory.images import ensure_hero_and_inline_images
 from factory.meta import fit_meta_description
+from factory.linkedin import (
+    linkedin_build_auth_url,
+    linkedin_exchange_code,
+    linkedin_get_member_id,
+    db_get_linkedin,
+    db_set_linkedin,
+    db_clear_linkedin,
+    db_create_state,
+    db_consume_state,
+    post_job_to_linkedin,
+)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
@@ -46,6 +57,31 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+
+# Lightweight .env loader (so PM2 does not need env wiring).
+# Lines: KEY=VALUE, supports comments (#) and quoted values.
+def _load_dotenv(dotenv_path: str) -> None:
+    if not dotenv_path or not os.path.exists(dotenv_path):
+        return
+    try:
+        with open(dotenv_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if len(v) >= 2 and (v[0] == v[-1]) and (v[0] in ("\"", "'")):
+                    v = v[1:-1]
+                if k and (k not in os.environ):
+                    os.environ[k] = v
+    except Exception:
+        # Never fail startup on env parsing.
+        return
+
 # Keep AI rewrite source clean: the template already adds nav/share/cta blocks.
 def _sanitize_source_html(html: str | None) -> str | None:
     if not html:
@@ -61,6 +97,7 @@ def _sanitize_source_html(html: str | None) -> str | None:
 
 @app.on_event("startup")
 def _startup() -> None:
+    _load_dotenv(os.path.join(APP_DIR, '.env'))
     db_init(DB_PATH)
 
 
@@ -743,3 +780,150 @@ def delete_job(job_id: str):
         conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,))
 
     return {"success": True}
+
+
+# --- LinkedIn integration ---
+
+@app.get("/api/linkedin/status")
+def linkedin_status():
+    auth = db_get_linkedin(DB_PATH) or {}
+    org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip()
+    org_db = (auth.get("org_urn") or "").strip()
+    org = org_env or org_db or None
+    return {
+        "success": True,
+        "connected": bool((auth.get("access_token") or "").strip()),
+        "memberUrn": auth.get("member_urn"),
+        "orgUrn": org,
+        "orgUrnConfigured": bool(org_env),
+    }
+
+
+@app.post("/api/linkedin/disconnect")
+def linkedin_disconnect():
+    db_clear_linkedin(DB_PATH)
+    return {"success": True}
+
+
+@app.get("/linkedin/connect")
+def linkedin_connect():
+    client_id = (os.environ.get("LINKEDIN_CLIENT_ID") or "").strip()
+    client_secret = (os.environ.get("LINKEDIN_CLIENT_SECRET") or "").strip()
+    redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or "https://myugc.studio/factory/linkedin/callback"
+
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET in .env")
+
+    state = secrets.token_urlsafe(24)
+    db_create_state(DB_PATH, provider="linkedin", state=state)
+    url = linkedin_build_auth_url(client_id=client_id, redirect_uri=redirect_uri, state=state)
+    return RedirectResponse(url=url, status_code=302)
+
+
+@app.get("/linkedin/callback")
+def linkedin_callback(code: str | None = None, state: str | None = None):
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing code/state")
+
+    if not db_consume_state(DB_PATH, provider="linkedin", state=state, max_age_min=20):
+        raise HTTPException(status_code=400, detail="Invalid/expired state")
+
+    client_id = (os.environ.get("LINKEDIN_CLIENT_ID") or "").strip()
+    client_secret = (os.environ.get("LINKEDIN_CLIENT_SECRET") or "").strip()
+    redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or "https://myugc.studio/factory/linkedin/callback"
+
+    data = linkedin_exchange_code(code=code, redirect_uri=redirect_uri, client_id=client_id, client_secret=client_secret)
+
+    access_token = (data.get("access_token") or "").strip()
+    refresh_token = (data.get("refresh_token") or "").strip() or None
+    expires_in = int(data.get("expires_in") or 0)
+    expires_at_iso = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=expires_in)).isoformat() if expires_in else None
+
+    if not access_token:
+        raise HTTPException(status_code=400, detail=f"No access_token returned: {data}")
+
+    member_id = linkedin_get_member_id(access_token=access_token)
+    member_urn = f"urn:li:person:{member_id}"
+
+    org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip() or None
+
+    db_set_linkedin(
+        DB_PATH,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_at=expires_at_iso,
+        member_urn=member_urn,
+        org_urn=org_env,
+    )
+
+    return RedirectResponse(url="/factory/", status_code=302)
+
+
+@app.post("/api/jobs/{job_id}/linkedin/publish")
+def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
+    payload = payload or {}
+
+    client_id = (os.environ.get("LINKEDIN_CLIENT_ID") or "").strip()
+    client_secret = (os.environ.get("LINKEDIN_CLIENT_SECRET") or "").strip()
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET")
+
+    mode = (payload.get("as") or "member").strip().lower()
+    if mode not in ("member", "org"):
+        mode = "member"
+
+    auth = db_get_linkedin(DB_PATH) or {}
+    member_urn = (auth.get("member_urn") or "").strip()
+    if not member_urn:
+        raise HTTPException(status_code=400, detail="LinkedIn not connected")
+
+    org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip() or None
+    org_urn = (payload.get("orgUrn") or "").strip() or org_env or (auth.get("org_urn") or "").strip() or None
+
+    with db_connect(DB_PATH) as conn:
+        job = conn.execute(
+            "SELECT topic, slug, title, description, category, hero_image, draft_html, status, published_url FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    topic, slug, title, description, category, hero_image, draft_html, status, published_url = job
+
+    if not slug:
+        raise HTTPException(status_code=400, detail="Missing slug")
+
+    # We post a link to the live blog page.
+    url = (published_url or f"https://myugc.studio/blog/{slug}.html").strip()
+
+    hero_filename = os.path.basename(hero_image or "")
+    hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename else ""
+    if not hero_filename or not os.path.exists(hero_abs):
+        # Keep behavior explicit: LinkedIn post should use the existing hero.
+        raise HTTPException(status_code=400, detail="Hero image file not found in /var/www/landing/blog. Publish the article first so the hero is generated.")
+
+    log_event(DB_PATH, job_id, "INFO", f"LinkedIn publish: mode={mode}")
+
+    try:
+        resp = post_job_to_linkedin(
+            db_path=DB_PATH,
+            client_id=client_id,
+            client_secret=client_secret,
+            author_mode=mode,
+            member_urn=member_urn,
+            org_urn=org_urn,
+            title=title or topic,
+            description=description or "",
+            content_html=draft_html or "",
+            url=url,
+            hero_abs_path=hero_abs,
+            hero_filename=hero_filename,
+        )
+    except Exception as e:
+        msg = f"LinkedIn publish failed: {e}"
+        log_event(DB_PATH, job_id, "ERROR", msg)
+        return JSONResponse(status_code=200, content={"success": False, "error": msg})
+
+    log_event(DB_PATH, job_id, "READY", "Posted to LinkedIn")
+    return {"success": True, "response": resp}
