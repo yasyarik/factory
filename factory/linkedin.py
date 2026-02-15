@@ -61,8 +61,7 @@ def linkedin_scopes(mode: str = 'member') -> str:
     # Add org scope only when explicitly requested.
     scopes = [
         'r_liteprofile',
-        'r_emailaddress',
-        'w_member_social',
+                'w_member_social',
     ]
     if (mode or '').lower().strip() == 'org':
         scopes.append('w_organization_social')
