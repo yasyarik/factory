@@ -806,7 +806,7 @@ def linkedin_disconnect():
 
 
 @app.get("/linkedin/connect")
-def linkedin_connect():
+def linkedin_connect(request: Request):
     client_id = (os.environ.get("LINKEDIN_CLIENT_ID") or "").strip()
     client_secret = (os.environ.get("LINKEDIN_CLIENT_SECRET") or "").strip()
     redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or "https://myugc.studio/factory/linkedin/callback"
@@ -814,14 +814,27 @@ def linkedin_connect():
     if not client_id or not client_secret:
         raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET in .env")
 
+    mode = (request.query_params.get('as') or 'member').strip().lower()
+    if mode not in ('member', 'org'):
+        mode = 'member'
+
     state = secrets.token_urlsafe(24)
     db_create_state(DB_PATH, provider="linkedin", state=state)
-    url = linkedin_build_auth_url(client_id=client_id, redirect_uri=redirect_uri, state=state)
+    url = linkedin_build_auth_url(client_id=client_id, redirect_uri=redirect_uri, state=state, mode=mode)
     return RedirectResponse(url=url, status_code=302)
 
 
-@app.get("/linkedin/callback")
-def linkedin_callback(code: str | None = None, state: str | None = None):
+@app.get("/linkedin/callback", response_class=HTMLResponse)
+def linkedin_callback(code: str | None = None, state: str | None = None, error: str | None = None, error_description: str | None = None):
+    if error:
+        msg = f"LinkedIn OAuth error: {error}"
+        if error_description:
+            msg += f" ({error_description})"
+        return HTMLResponse(
+            content=f"<h3>{msg}</h3><p><a href='/factory/'>Back to Factory</a></p>",
+            status_code=400,
+        )
+
     if not code or not state:
         raise HTTPException(status_code=400, detail="Missing code/state")
 

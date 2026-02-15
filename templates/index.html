@@ -282,7 +282,9 @@
       }
 
       function linkedinConnect() {
-        window.location.href = resolveUrl('/linkedin/connect');
+        var modeEl = el('liAs');
+        var mode = (modeEl && modeEl.value) ? modeEl.value : 'member';
+        window.location.href = resolveUrl('/linkedin/connect?as=' + encodeURIComponent(mode));
       }
 
       async function linkedinDisconnect() {

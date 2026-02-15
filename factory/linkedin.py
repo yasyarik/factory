@@ -56,29 +56,28 @@ def _truncate_to(s: str, max_len: int) -> str:
     return cut.rstrip(" ,;:-")
 
 
-def linkedin_scopes() -> str:
-    # Member + Org posting. Note: org posting requires page permissions and app approval.
+def linkedin_scopes(mode: str = 'member') -> str:
+    # Keep scopes minimal so OAuth succeeds with default app permissions.
+    # Add org scope only when explicitly requested.
     scopes = [
-        "openid",
-        "profile",
-        "email",
-        "r_liteprofile",
-        "w_member_social",
-        "w_organization_social",
-        "offline_access",
+        'r_liteprofile',
+        'r_emailaddress',
+        'w_member_social',
     ]
-    return " ".join(scopes)
+    if (mode or '').lower().strip() == 'org':
+        scopes.append('w_organization_social')
+    return ' '.join(scopes)
 
 
-def linkedin_build_auth_url(*, client_id: str, redirect_uri: str, state: str) -> str:
+def linkedin_build_auth_url(*, client_id: str, redirect_uri: str, state: str, mode: str = 'member') -> str:
     q = {
-        "response_type": "code",
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "scope": linkedin_scopes(),
-        "state": state,
+        'response_type': 'code',
+        'client_id': client_id,
+        'redirect_uri': redirect_uri,
+        'scope': linkedin_scopes(mode),
+        'state': state,
     }
-    return LINKEDIN_AUTH_URL + "?" + urllib.parse.urlencode(q)
+    return LINKEDIN_AUTH_URL + '?' + urllib.parse.urlencode(q)
 
 
 def linkedin_exchange_code(*, code: str, redirect_uri: str, client_id: str, client_secret: str) -> dict[str, Any]:
