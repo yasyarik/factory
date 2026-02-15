@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Local state
+factory.sqlite
+*.sqlite
+*.db
+
+# Backups
+*.bak
+*.bak.*
+*.tgz
+
+# OS
+.DS_Store
+._*
+
+# Logs
+*.log

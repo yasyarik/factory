@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Content Factory</title>
+    <meta name="robots" content="noindex, nofollow, noarchive" />
+    <style>
+      :root {
+        --bg: #070311;
+        --panel: rgba(255, 255, 255, 0.04);
+        --border: rgba(255, 255, 255, 0.12);
+        --text: #ededed;
+        --dim: rgba(255, 255, 255, 0.72);
+        --accent: rgba(139, 92, 246, 1);
+        --good: rgba(34, 197, 94, 1);
+        --warn: rgba(245, 158, 11, 1);
+        --bad: rgba(239, 68, 68, 1);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        background:
+          radial-gradient(1200px 600px at 18% 6%, rgba(139,92,246,0.25), transparent 55%),
+          radial-gradient(1000px 600px at 86% 18%, rgba(34,197,94,0.12), transparent 60%),
+          linear-gradient(180deg, #0a0514 0%, var(--bg) 100%);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      .wrap { max-width: 1200px; margin: 0 auto; padding: 28px 18px 80px; }
+      h1 { margin: 0; font-size: 36px; letter-spacing: -0.02em; font-weight: 950; }
+      .sub { margin: 10px 0 0; color: var(--dim); line-height: 1.5; max-width: 920px; }
+      .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .panel {
+        margin-top: 18px;
+        border: 1px solid var(--border);
+        background: var(--panel);
+        border-radius: 18px;
+        padding: 14px;
+        box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+      }
+      input, select {
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.04);
+        color: var(--text);
+        padding: 10px 12px;
+        border-radius: 999px;
+        font-weight: 800;
+        font-size: 14px;
+        outline: none;
+      }
+      input::placeholder { color: rgba(255,255,255,0.5); font-weight: 700; }
+      button {
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.06);
+        color: var(--text);
+        padding: 10px 14px;
+        border-radius: 999px;
+        font-weight: 900;
+        font-size: 14px;
+        cursor: pointer;
+      }
+      button.primary {
+        border-color: rgba(139,92,246,0.55);
+        background: linear-gradient(135deg, rgba(139,92,246,0.45), rgba(124,58,237,0.2));
+      }
+      button.warn {
+        border-color: rgba(245,158,11,0.55);
+        background: linear-gradient(135deg, rgba(245,158,11,0.35), rgba(139,92,246,0.20));
+      }
+      button.good {
+        border-color: rgba(34,197,94,0.55);
+        background: linear-gradient(135deg, rgba(34,197,94,0.25), rgba(139,92,246,0.15));
+      }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+      table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+      th, td { padding: 12px 10px; border-top: 1px solid rgba(255,255,255,0.07); text-align: left; vertical-align: top; font-size: 14px; overflow-wrap: anywhere; }
+      th { border-top: none; background: rgba(255,255,255,0.04); text-transform: uppercase; letter-spacing: 0.02em; font-weight: 950; font-size: 12px; }
+      .tag { display: inline-flex; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); font-weight: 950; font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; }
+      .tag.new { border-color: rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); }
+      .tag.ready { border-color: rgba(139,92,246,0.35); background: rgba(139,92,246,0.18); }
+      .tag.generating { border-color: rgba(245,158,11,0.45); background: rgba(245,158,11,0.18); }
+      .tag.published { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.18); }
+      .tag.error { border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.18); }
+      .muted { color: var(--dim); }
+      a { color: #c4b5fd; text-decoration: none; font-weight: 900; }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; word-break: break-all; }
+      .right { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+      .err { color: rgba(254,202,202,1); font-weight: 800; }
+      .modal-backdrop {
+        position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+        display: none; align-items: center; justify-content: center; padding: 18px;
+      }
+      .modal {
+        max-width: 980px; width: 100%;
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(10,5,20,0.92);
+        border-radius: 18px;
+        padding: 14px;
+      }
+      pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; color: rgba(255,255,255,0.88); }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="row" style="justify-content: space-between; align-items: baseline;">
+        <div>
+          <h1>Content Factory</h1>
+          <p class="sub">Generate Cyber SEO blog drafts (Answer‑First, rich content, interlinking, FAQ schema) with a Preview → Approve workflow. Hidden from robots via basic auth + noindex.</p>
+        </div>
+        <div class="muted mono">build: {{ build }}</div>
+      </div>
+
+      <div class="panel">
+        <div class="row">
+          <input id="topic" style="flex: 1; min-width: 260px" placeholder="Topic (EN)" />
+          <input id="category" style="width: 200px" placeholder="Category (optional)" />
+          <input id="hero" style="width: 260px" placeholder="Hero image (optional, e.g. scaling-ai.jpg)" />
+          <select id="visibility" style="width: 170px">
+            <option value="hidden" selected>Hidden</option>
+            <option value="public">Public</option>
+          </select>
+          <button class="primary" id="createBtn">Create</button>
+          <button id="refreshBtn">Refresh</button>
+        </div>
+        <div class="muted" style="margin-top: 10px;">Tip: set `GEMINI_API_KEY` in the factory process env to enable AI generation. Without it, we generate a deterministic placeholder draft (for pipeline testing).</div>
+      </div>
+
+            <div class="panel">
+        <div class="row">
+          <input id="importSlug" list="importList" style="flex: 1; min-width: 260px" placeholder="Import existing post (slug or URL)" />
+          <button class="primary" id="importBtn">Import</button>
+        </div>
+        <datalist id="importList"></datalist>
+        <div class="muted" style="margin-top: 10px;">Import an existing /blog/&lt;slug&gt;.html into the factory as a draft so you can Rewrite → Preview → Publish without changing the URL.</div>
+      </div>
+
+<div class="panel" style="padding: 0; overflow-x: auto;">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 30%;">Topic</th>
+              <th style="width: 10%;">Status</th>
+              <th style="width: 20%;">Slug</th>
+              <th style="width: 20%;">Meta</th>
+              <th style="width: 20%;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="5" class="muted" style="padding: 16px;">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="modalBackdrop">
+      <div class="modal">
+        <div class="row" style="justify-content: space-between;">
+          <div style="font-weight: 950; letter-spacing: -0.01em;">Job Logs</div>
+          <button id="closeModal">Close</button>
+        </div>
+        <div style="margin-top: 10px;">
+          <pre id="logsPre">Loading...</pre>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="editBackdrop">
+      <div class="modal">
+        <div class="row" style="justify-content: space-between;">
+          <div style="font-weight: 950; letter-spacing: -0.01em;">Edit Job</div>
+          <button id="closeEdit">Close</button>
+        </div>
+
+        <div class="row" style="margin-top: 10px;">
+          <input id="editTitle" style="flex: 1; min-width: 260px" placeholder="Title" />
+          <input id="editSlug" style="width: 260px" placeholder="Slug" />
+          <select id="editVisibility" style="width: 170px">
+            <option value="hidden">Hidden</option>
+            <option value="public">Public</option>
+          </select>
+        </div>
+
+        <div class="row" style="margin-top: 10px;">
+          <input id="editCategory" style="width: 220px" placeholder="Category" />
+          <input id="editHero" style="flex: 1; min-width: 260px" placeholder="Hero image filename" />
+        </div>
+
+        <div style="margin-top: 10px;">
+          <div class="muted" style="font-weight: 900; margin-bottom: 6px;">Description (155-160 chars target)</div>
+          <input id="editDesc" style="width: 100%; border-radius: 14px;" placeholder="Meta description" />
+        </div>
+
+        <div style="margin-top: 12px;">
+          <div class="muted" style="font-weight: 900; margin-bottom: 6px;">HTML (draft)</div>
+          <textarea id="editHtml" style="width: 100%; height: 240px; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.04); color: var(--text); border-radius: 14px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 12px;"></textarea>
+        </div>
+
+        <div style="margin-top: 12px;">
+          <div class="muted" style="font-weight: 900; margin-bottom: 6px;">FAQ (JSON array)</div>
+          <textarea id="editFaq" style="width: 100%; height: 140px; border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.04); color: var(--text); border-radius: 14px; padding: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace; font-size: 12px;"></textarea>
+        </div>
+
+        <div class="row" style="margin-top: 12px; justify-content: flex-end;">
+          <button class="primary" id="saveEdit">Save</button>
+        </div>
+      </div>
+    </div>
+
+
+    <script>
+      function el(id) { return document.getElementById(id); }
+      var BASE_PATH = window.location.pathname || '/';
+      if (!BASE_PATH.endsWith('/')) BASE_PATH = BASE_PATH + '/';
+      var BASE = new URL(BASE_PATH, window.location.origin);
+
+      var _pollTimer = null;
+      function schedulePoll() {
+        if (_pollTimer) return;
+        _pollTimer = setTimeout(function() {
+          _pollTimer = null;
+          refresh().catch(function(){});
+        }, 2000);
+      }
+
+      function resolveUrl(path) {
+        var p = String(path || '');
+        return new URL(p.replace(/^\//, ''), BASE).toString();
+      }
+
+      function tagClass(status) {
+        var s = String(status || '').toLowerCase();
+        if (s === 'ready') return 'ready';
+        if (s === 'published') return 'published';
+        if (s === 'generating') return 'generating';
+        if (s === 'error') return 'error';
+        return 'new';
+      }
+
+      function escapeHtml(v) {
+        var str = String(v == null ? '' : v);
+        return str
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      var _postsLoaded = false;
+
+      async function loadPostSuggestions() {
+        if (_postsLoaded) return;
+        _postsLoaded = true;
+        try {
+          var data = await api('/api/posts');
+          var posts = (data && data.posts) ? data.posts : [];
+          var dl = el('importList');
+          if (!dl) return;
+          dl.innerHTML = posts.map(function(p){
+            var v = (p && p.slug) ? String(p.slug) : '';
+            if (!v) return '';
+            return '<option value="' + escapeHtml(v) + '">' + escapeHtml(p.title || '') + '</option>';
+          }).join('');
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      async function api(path, opts) {
+        opts = opts || {};
+        if (!('credentials' in opts)) opts.credentials = 'same-origin';
+        var res = await fetch(resolveUrl(path), opts);
+        var data = {};
+        try { data = await res.json(); } catch (e) { data = {}; }
+        if (!res.ok) throw new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
+        return data;
+      }
+
+      async function refresh() {
+        var tbody = el('tbody');
+        var data = await api('/api/jobs');
+        var jobs = (data && data.jobs) ? data.jobs : [];
+        if (!jobs.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="muted" style="padding: 16px;">No jobs yet.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = jobs.map(function(j) {
+          var status = j.status || 'NEW';
+          var slug = j.slug || '';
+          var visibility = j.visibility || 'hidden';
+
+          var meta = (j.title
+              ? '<div style="font-weight:900; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(j.title) + '</div>'
+              : '<div class="muted">-</div>')
+            + (j.description
+              ? '<div class="muted" style="margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(j.description) + '</div>'
+              : '')
+            + '<div class="muted" style="margin-top:6px;">visibility: <span class="mono">' + escapeHtml(visibility) + '</span></div>';
+
+          var previewUrl = resolveUrl('/preview/' + j.id);
+          var published = j.publishedUrl ? '<a href="' + j.publishedUrl + '" target="_blank" rel="noreferrer">live</a>' : '';
+
+          var isGenerating = (status === 'GENERATING');
+          var canGenerate = (!isGenerating) && (status === 'NEW' || status === 'ERROR' || status === 'READY' || status === 'PUBLISHED');
+          var genLabel = isGenerating ? 'Generating...' : ((status === 'READY' || status === 'PUBLISHED') ? 'Rewrite' : 'Generate');
+          var canPreview = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
+          var canPublish = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
+          var canEdit = (status !== 'NEW');
+
+          var err = j.error ? '<div class="err" style="margin-top:6px;">' + escapeHtml(j.error) + '</div>' : '';
+
+          return (
+            '<tr>'
+            + '<td>'
+            + '<div style="font-weight:900;">' + escapeHtml(j.topic || '') + '</div>'
+            + err
+            + '<div class="muted mono" style="margin-top:8px;">id: ' + escapeHtml(j.id) + '</div>'
+            + '</td>'
+            + '<td><span class="tag ' + tagClass(status) + '">' + escapeHtml(status) + '</span></td>'
+            + '<td class="mono">' + escapeHtml(slug) + '</td>'
+            + '<td>' + meta + '</td>'
+            + '<td>'
+            + '<div class="right">'
+            + '<button ' + (canGenerate ? '' : 'disabled') + ' onclick="generateJob(\'' + escapeHtml(j.id) + '\', \'' + escapeHtml(status) + '\')">' + genLabel + '</button>'
+            + '<button ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
+            + '<button class="good" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
+            + '<button ' + (canEdit ? '' : 'disabled') + ' onclick="openEdit(\'' + escapeHtml(j.id) + '\')">Edit</button>'
+            + '<button class="warn" onclick="deleteJob(\'' + escapeHtml(j.id) + '\')">Delete</button>'
+            + '<button onclick="openLogs(\'' + escapeHtml(j.id) + '\')">Logs</button>'
+            + published
+            + '</div>'
+            + '</td>'
+            + '</tr>'
+          );
+        }).join('');
+      
+        var hasGenerating = jobs.some(function(x){ return (x && x.status) === 'GENERATING'; });
+        if (hasGenerating) schedulePoll();
+      }
+
+      async function createJob() {
+        var topic = (el('topic').value || '').trim();
+        var category = (el('category').value || '').trim();
+        var heroImage = (el('hero').value || '').trim();
+        var visEl = el('visibility');
+        var visibility = ((visEl && visEl.value) ? visEl.value : 'hidden').trim();
+        if (!topic) return;
+
+        try {
+          await api('/api/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              topic: topic,
+              category: category || undefined,
+              heroImage: heroImage || undefined,
+              visibility: visibility,
+            })
+          });
+          el('topic').value = '';
+          await refresh();
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
+      async function generateJob(id, status) {
+        if (status === 'READY' || status === 'PUBLISHED') {
+          if (!confirm('Rewrite this draft with AI? This will replace the current draft HTML.')) return;
+        }
+        try {
+          // Kick off generation, then refresh quickly to show GENERATING status.
+          var p = api('/api/jobs/' + id + '/generate', { method: 'POST' });
+          setTimeout(function(){ refresh().catch(function(){}); }, 250);
+          var res = await p;
+          if (res && res.success === false) {
+            alert(String(res.error || 'Generation failed'));
+          }
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        } finally {
+          try { await refresh(); } catch (e2) { alert(String((e2 && e2.message) || e2)); }
+        }
+      }
+
+      async function publishJob(id) {
+        if (!confirm('Publish to /var/www/landing/blog + commit/push?')) return;
+        try {
+          var data = await api('/api/jobs/' + id + '/publish', { method: 'POST' });
+          if (data && data.url) alert('Published: ' + data.url);
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        } finally {
+          try { await refresh(); } catch (e2) { alert(String((e2 && e2.message) || e2)); }
+        }
+      }
+
+      async function deleteJob(id) {
+        if (!confirm('Delete job (and remove published page if exists)?')) return;
+        try {
+          await api('/api/jobs/' + id, { method: 'DELETE' });
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        } finally {
+          try { await refresh(); } catch (e2) { alert(String((e2 && e2.message) || e2)); }
+        }
+      }
+
+      async function openLogs(id) {
+        el('modalBackdrop').style.display = 'flex';
+        el('logsPre').textContent = 'Loading...';
+        try {
+          var data = await api('/api/jobs/' + id + '/logs');
+          var logs = (data && data.logs) ? data.logs : [];
+          var lines = logs.map(function(l) { return '[' + l.ts + '] ' + l.level + ' ' + l.step + ': ' + l.message; });
+          el('logsPre').textContent = lines.join('\n') || '(no logs)';
+        } catch (e) {
+          el('logsPre').textContent = String((e && e.message) || e);
+        }
+      }
+
+      var editJobId = null;
+
+      async function openEdit(id) {
+        editJobId = id;
+        el('editBackdrop').style.display = 'flex';
+        try {
+          var data = await api('/api/jobs/' + id);
+          var j = (data && data.job) ? data.job : {};
+          el('editTitle').value = j.title || '';
+          el('editSlug').value = j.slug || '';
+          el('editDesc').value = j.description || '';
+          el('editCategory').value = j.category || '';
+          el('editHero').value = j.heroImage || '';
+          el('editVisibility').value = j.visibility || 'hidden';
+          el('editHtml').value = j.draftHtml || '';
+          el('editFaq').value = JSON.stringify(j.faq || [], null, 2);
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
+      async function saveEdit() {
+        if (!editJobId) return;
+
+        var faq = [];
+        try {
+          faq = JSON.parse(el('editFaq').value || '[]');
+        } catch (e) {
+          alert('FAQ must be valid JSON array');
+          return;
+        }
+
+        try {
+          await api('/api/jobs/' + editJobId, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: el('editTitle').value,
+              slug: el('editSlug').value,
+              description: el('editDesc').value,
+              category: el('editCategory').value,
+              heroImage: el('editHero').value,
+              visibility: el('editVisibility').value,
+              draftHtml: el('editHtml').value,
+              faq: faq,
+            })
+          });
+          el('editBackdrop').style.display = 'none';
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        } finally {
+          try { await refresh(); } catch (e2) { alert(String((e2 && e2.message) || e2)); }
+        }
+      }
+
+      async function importPost() {
+        var v = (el('importSlug').value || '').trim();
+        if (!v) return;
+        try {
+          await api('/api/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ slugOrUrl: v })
+          });
+          el('importSlug').value = '';
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        } finally {
+          try { await refresh(); } catch (e2) { alert(String((e2 && e2.message) || e2)); }
+        }
+      }
+
+el('createBtn').addEventListener('click', createJob);
+      el('importBtn').addEventListener('click', importPost);
+
+      el('refreshBtn').addEventListener('click', function() {
+        loadPostSuggestions();
+
+      refresh().catch(function(err) { alert(String((err && err.message) || err)); });
+      });
+
+      el('closeModal').addEventListener('click', function() { el('modalBackdrop').style.display = 'none'; });
+      el('modalBackdrop').addEventListener('click', function(e) { if (e.target === el('modalBackdrop')) el('modalBackdrop').style.display = 'none'; });
+
+      el('closeEdit').addEventListener('click', function() { el('editBackdrop').style.display = 'none'; });
+      el('editBackdrop').addEventListener('click', function(e) { if (e.target === el('editBackdrop')) el('editBackdrop').style.display = 'none'; });
+
+      el('saveEdit').addEventListener('click', saveEdit);
+
+      loadPostSuggestions();
+
+      refresh().catch(function(err) {
+        el('tbody').innerHTML = '<tr><td colspan="5" class="err" style="padding:16px;">' + escapeHtml((err && err.message) || String(err)) + '</td></tr>';
+      });
+    </script>
+  </body>
+</html>
+
