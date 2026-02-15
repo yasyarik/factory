@@ -894,6 +894,9 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
     if mode not in ("member", "org"):
         mode = "member"
 
+
+    include_link = bool(payload.get("includeLink"))
+
     auth = db_get_linkedin(DB_PATH) or {}
     member_urn = (auth.get("member_urn") or "").strip()
     if not member_urn:
@@ -927,6 +930,10 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not hero_filename or not os.path.exists(hero_abs):
         raise HTTPException(status_code=400, detail="Hero image file not found in /var/www/landing/blog. Publish the article first so the hero is generated.")
 
+    author_bio = (os.environ.get("LINKEDIN_AUTHOR_BIO") or os.environ.get("LI_AUTHOR_BIO") or "").strip()
+    if not author_bio:
+        author_bio = "I build practical marketing and workflow systems. Here's what I learned."
+
     # Mark as POSTING immediately so UI can disable the button.
     with db_connect(DB_PATH) as conn:
         conn.execute(
@@ -949,7 +956,9 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
                 org_urn=org_urn,
                 title=title or topic,
                 description=description or "",
-                content_html=draft_html or "",
+                 content_html=draft_html or "",
+                author_bio=author_bio,
+                include_link=include_link,
                 url=url,
                 hero_abs_path=hero_abs,
                 hero_filename=hero_filename,

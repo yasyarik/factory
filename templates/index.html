@@ -137,6 +137,7 @@
             <option value="member" selected>Creator</option>
             <option value="org">Company Page</option>
           </select>
+          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="liIncludeLink" />Include link</label>
           <input id="liOrgUrn" style="flex: 1; min-width: 320px" placeholder="Org URN (urn:li:organization:123456)" />
           <button class="primary" id="liConnectBtn">Connect</button>
           <button class="warn" id="liDisconnectBtn">Disconnect</button>
@@ -301,7 +302,8 @@
 
         var modeEl = el('liAs');
         var mode = (modeEl && modeEl.value) ? modeEl.value : 'member';
-        var body = { as: mode };
+        var inc = !!(el('liIncludeLink') && el('liIncludeLink').checked);
+        var body = { as: mode, includeLink: inc };
 
         if (mode === 'org') {
           var org = (el('liOrgUrn') && el('liOrgUrn').value) ? el('liOrgUrn').value.trim() : '';

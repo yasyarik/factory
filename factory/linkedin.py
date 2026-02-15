@@ -215,43 +215,59 @@ def _guess_mime_from_filename(name: str) -> str:
     return "image/jpeg"
 
 
-def build_linkedin_summary(*, title: str, description: str, content_html: str, url: str) -> str:
-    """Create a LinkedIn post <= 3000 chars. Uses Gemini if configured; else deterministic fallback."""
+def build_linkedin_post(
+    *,
+    title: str,
+    description: str,
+    content_html: str,
+    author_bio: str,
+    include_link: bool,
+    url: str,
+) -> str:
+    """Create a LinkedIn post <= 3000 chars.
+
+    If include_link=False, we generate a full post within 3000 chars without a URL.
+    """
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
-    # Keep the input small and high-signal.
     body = _strip_html_to_text(content_html)
-    body = _truncate_to(body, 2500)
+    body = _truncate_to(body, 2600)
 
-    # We'll reserve space for the link and a couple newlines.
     MAX = 3000
-    RESERVE = min(MAX, len(url) + 10)
-    TARGET = MAX - RESERVE
+    suffix = ("\\n\\n" + url) if (include_link and url) else ""
+    target = MAX - len(suffix)
 
     if api_key:
         sys = (
-            "You are a senior B2B growth writer. "
-            "Write a LinkedIn post that promotes a blog article. "
-            "No markdown. No emojis. Plain text only. "
-            "Structure: hook (1 line), value bullets (3-6 short bullets), "
-            "one concise CTA line. "
-            "Add 3-6 relevant hashtags at the end. "
-            f"Hard limit: {TARGET} characters for the post text (excluding the URL we will append)."
+            "You are a senior B2B founder ghostwriter. "
+            "Write a LinkedIn post in FIRST PERSON as the author described below. "
+            "Plain text only. No markdown. No emojis. "
+            "Tone: confident, practical, specific. No hype. "
+            "Structure:\\n"
+            "- 1-2 line hook\\n"
+            "- 6-10 short bullets (1 line each)\\n"
+            "- 1 short paragraph with a clear conclusion\\n"
+            "- 3-6 hashtags\\n"
+            "Hard constraints:\\n"
+            f"- Max {target} characters for the post text (excluding an optional URL we may append).\\n"
+            "- Do NOT reference the words 'blog', 'article', or 'link' unless include_link=true.\\n"
         )
+
         user = (
-            f"TITLE: {title}\n"
-            f"META DESCRIPTION: {description}\n"
-            f"ARTICLE EXCERPT (clean text): {body}\n"
+            f"AUTHOR BIO:\\n{author_bio}\\n\\n"
+            f"TITLE: {title}\\n"
+            f"META DESCRIPTION: {description}\\n\\n"
+            f"SOURCE (clean text excerpt):\\n{body}\\n\\n"
+            f"include_link={str(bool(include_link)).lower()}\\n"
             "Return ONLY the post text."
         )
 
-        # Use the same REST pattern as generate.py (no grounding needed).
         gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": sys + "\n\n" + user}]}],
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 800},
+            "contents": [{"role": "user", "parts": [{"text": sys + "\\n\\n" + user}]}],
+            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 900},
         }
         r = requests.post(gen_url, json=payload, timeout=60)
         if r.status_code < 400:
@@ -262,22 +278,27 @@ def build_linkedin_summary(*, title: str, description: str, content_html: str, u
                 text = ""
             text = (text or "").strip()
             if text:
-                text = _truncate_to(text, TARGET)
-                return text + "\n\n" + url
+                text = _truncate_to(text, target)
+                return text + suffix
 
-    # Deterministic fallback.
-    base = _truncate_to((description or title or "").strip(), 180)
+    hook = _truncate_to((title or "").strip(), 120)
+    base = _truncate_to((description or "").strip(), 220)
+
     post = (
-        f"{title}\n\n"
-        f"{base}\n\n"
-        "Key takeaways:\n"
-        "- What changed in 2026\n"
-        "- What to measure and test\n"
-        "- A simple execution checklist\n\n"
-        "Read the full guide:\n"
+        f"{hook}\\n\\n"
+        f"{base}\\n\\n"
+        "Here is how I think about it:\\n"
+        "- What changed in 2026\\n"
+        "- What to measure\\n"
+        "- What to test\\n"
+        "- What to ship\\n"
+        "- What to stop doing\\n\\n"
+        "Conclusion: consistency beats novelty when the feedback loop is weekly.\\n\\n"
+        "#marketing #ugc #tiktokads #growth #performance"
     )
-    post = _truncate_to(post, TARGET)
-    return post + "\n" + url
+    post = _truncate_to(post, target)
+    return post + suffix
+
 
 
 # --- SQLite persistence (single-tenant) ---
@@ -429,6 +450,8 @@ def post_job_to_linkedin(
     title: str,
     description: str,
     content_html: str,
+    author_bio: str,
+    include_link: bool,
     url: str,
     hero_abs_path: str,
     hero_filename: str,
@@ -445,7 +468,7 @@ def post_job_to_linkedin(
     else:
         author_urn = member_urn
 
-    text = build_linkedin_summary(title=title, description=description, content_html=content_html, url=url)
+    text = build_linkedin_post(title=title, description=description, content_html=content_html, author_bio=author_bio, include_link=include_link, url=url)
     if len(text) > 3000:
         text = _truncate_to(text, 3000)
 
