@@ -42,6 +42,15 @@ def db_init(path: str) -> None:
         if "visibility" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'hidden';")
 
+        if 'linkedin_status' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_status TEXT;")
+        if 'linkedin_post_url' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_post_url TEXT;")
+        if 'linkedin_posted_at' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_posted_at TEXT;")
+        if 'linkedin_error' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_error TEXT;")
+
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS job_logs (

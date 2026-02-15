@@ -316,6 +316,7 @@
           });
           if (out && out.success) {
             alert('Posted to LinkedIn');
+            schedulePoll();
           } else {
             alert((out && out.error) ? out.error : 'LinkedIn publish failed');
           }
@@ -384,7 +385,8 @@
             + (j.description
               ? '<div class="muted" style="margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(j.description) + '</div>'
               : '')
-            + '<div class="muted" style="margin-top:6px;">visibility: <span class="mono">' + escapeHtml(visibility) + '</span></div>';
+            + '<div class="muted" style="margin-top:6px;">visibility: <span class="mono">' + escapeHtml(visibility) + '</span></div>'
+            + (j.linkedinStatus ? ('<div class="muted" style="margin-top:6px;">linkedin: <span class="mono">' + escapeHtml(j.linkedinStatus) + '</span>' + (j.linkedinError ? (' <span class="err">' + escapeHtml(j.linkedinError) + '</span>') : '') + '</div>') : '');
 
           var previewUrl = resolveUrl('/preview/' + j.id);
           var published = j.publishedUrl ? '<a href="' + j.publishedUrl + '" target="_blank" rel="noreferrer">live</a>' : '';
@@ -395,7 +397,10 @@
           var canPreview = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
           var canPublish = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
           var canEdit = (status !== 'NEW');
-          var canLinkedIn = (!isGenerating) && (_li && _li.connected) && (status === 'READY' || status === 'PUBLISHED');
+          var liStatus = (j.linkedinStatus || '').toUpperCase();
+          var isPosting = (liStatus === 'POSTING');
+          var canLinkedIn = (!isGenerating) && (!isPosting) && (_li && _li.connected) && (status === 'READY' || status === 'PUBLISHED');
+          var liLabel = isPosting ? 'Posting...' : 'LinkedIn';
 
           var err = j.error ? '<div class="err" style="margin-top:6px;">' + escapeHtml(j.error) + '</div>' : '';
 
@@ -414,7 +419,7 @@
             + '<button ' + (canGenerate ? '' : 'disabled') + ' onclick="generateJob(\'' + escapeHtml(j.id) + '\', \'' + escapeHtml(status) + '\')">' + genLabel + '</button>'
             + '<button ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
             + '<button class="good" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
-            + '<button ' + (canLinkedIn ? '' : 'disabled') + ' onclick="linkedinPublish(\'' + escapeHtml(j.id) + '\')">LinkedIn</button>'
+            + '<button ' + (canLinkedIn ? '' : 'disabled') + ' onclick="linkedinPublish(\'' + escapeHtml(j.id) + '\')">' + liLabel + '</button>'
             + '<button ' + (canEdit ? '' : 'disabled') + ' onclick="openEdit(\'' + escapeHtml(j.id) + '\')">Edit</button>'
             + '<button class="warn" onclick="deleteJob(\'' + escapeHtml(j.id) + '\')">Delete</button>'
             + '<button onclick="openLogs(\'' + escapeHtml(j.id) + '\')">Logs</button>'
@@ -426,7 +431,8 @@
         }).join('');
       
         var hasGenerating = jobs.some(function(x){ return (x && x.status) === 'GENERATING'; });
-        if (hasGenerating) schedulePoll();
+        var hasPosting = jobs.some(function(x){ return (x && String(x.linkedinStatus||'').toUpperCase()) === 'POSTING'; });
+        if (hasGenerating || hasPosting) schedulePoll();
       }
 
       async function createJob() {

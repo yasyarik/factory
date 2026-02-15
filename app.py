@@ -118,7 +118,8 @@ def list_jobs():
         rows = conn.execute(
             """
             SELECT id, topic, slug, status, title, description, category, hero_image,
-                   draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url
+                   draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url,
+                   linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error
             FROM jobs
             ORDER BY created_at DESC
             LIMIT 500
@@ -151,6 +152,10 @@ def list_jobs():
                 "createdAt": r[13],
                 "updatedAt": r[14],
                 "publishedUrl": r[15],
+                "linkedinStatus": r[16],
+                "linkedinPostUrl": r[17],
+                "linkedinPostedAt": r[18],
+                "linkedinError": r[19],
             }
         )
 
@@ -586,7 +591,8 @@ def get_job(job_id: str):
         r = conn.execute(
             """
             SELECT id, topic, slug, status, title, description, category, hero_image,
-                   draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url
+                   draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url,
+                   linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error
             FROM jobs
             WHERE id=?
             """,
@@ -898,14 +904,17 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
 
     with db_connect(DB_PATH) as conn:
         job = conn.execute(
-            "SELECT topic, slug, title, description, category, hero_image, draft_html, status, published_url FROM jobs WHERE id=?",
+            "SELECT topic, slug, title, description, category, hero_image, draft_html, status, published_url, linkedin_status FROM jobs WHERE id=?",
             (job_id,),
         ).fetchone()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    topic, slug, title, description, category, hero_image, draft_html, status, published_url = job
+    topic, slug, title, description, category, hero_image, draft_html, status, published_url, li_status = job
+
+    if li_status == "POSTING":
+        return {"success": True, "status": "POSTING"}
 
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
@@ -916,30 +925,56 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
     hero_filename = os.path.basename(hero_image or "")
     hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename else ""
     if not hero_filename or not os.path.exists(hero_abs):
-        # Keep behavior explicit: LinkedIn post should use the existing hero.
         raise HTTPException(status_code=400, detail="Hero image file not found in /var/www/landing/blog. Publish the article first so the hero is generated.")
 
-    log_event(DB_PATH, job_id, "INFO", f"LinkedIn publish: mode={mode}")
-
-    try:
-        resp = post_job_to_linkedin(
-            db_path=DB_PATH,
-            client_id=client_id,
-            client_secret=client_secret,
-            author_mode=mode,
-            member_urn=member_urn,
-            org_urn=org_urn,
-            title=title or topic,
-            description=description or "",
-            content_html=draft_html or "",
-            url=url,
-            hero_abs_path=hero_abs,
-            hero_filename=hero_filename,
+    # Mark as POSTING immediately so UI can disable the button.
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE jobs SET linkedin_status='POSTING', linkedin_error=NULL, updated_at=? WHERE id=?",
+            (utcnow_iso(), job_id),
         )
-    except Exception as e:
-        msg = f"LinkedIn publish failed: {e}"
-        log_event(DB_PATH, job_id, "ERROR", msg)
-        return JSONResponse(status_code=200, content={"success": False, "error": msg})
 
-    log_event(DB_PATH, job_id, "READY", "Posted to LinkedIn")
-    return {"success": True, "response": resp}
+    log_event(DB_PATH, job_id, "INFO", f"LinkedIn posting started: mode={mode}")
+
+    import threading
+
+    def _worker():
+        try:
+            resp = post_job_to_linkedin(
+                db_path=DB_PATH,
+                client_id=client_id,
+                client_secret=client_secret,
+                author_mode=mode,
+                member_urn=member_urn,
+                org_urn=org_urn,
+                title=title or topic,
+                description=description or "",
+                content_html=draft_html or "",
+                url=url,
+                hero_abs_path=hero_abs,
+                hero_filename=hero_filename,
+            )
+
+            post_id = None
+            if isinstance(resp, dict):
+                post_id = resp.get("id") or resp.get("urn") or resp.get("value")
+
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET linkedin_status='POSTED', linkedin_post_url=?, linkedin_posted_at=?, linkedin_error=NULL, updated_at=? WHERE id=?",
+                    (post_id, utcnow_iso(), utcnow_iso(), job_id),
+                )
+
+            log_event(DB_PATH, job_id, "READY", "Posted to LinkedIn")
+        except Exception as e:
+            msg = f"LinkedIn publish failed: {e}"
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET linkedin_status='ERROR', linkedin_error=?, updated_at=? WHERE id=?",
+                    (msg, utcnow_iso(), job_id),
+                )
+            log_event(DB_PATH, job_id, "ERROR", msg)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    return {"success": True, "status": "POSTING"}
