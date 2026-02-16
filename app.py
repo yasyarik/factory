@@ -117,6 +117,38 @@ def _save_social_post(
 
 
 
+def _mark_stale_social_postings(max_age_min: int = 5) -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_min)).replace(microsecond=0).isoformat()
+    now = utcnow_iso()
+    stale_msg = f"Stale POSTING timeout after {max_age_min} minutes"
+
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET telegram_status='ERROR', telegram_error=?, updated_at=?
+            WHERE telegram_status='POSTING' AND updated_at < ?
+            """,
+            (stale_msg, now, cutoff),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET linkedin_status='ERROR', linkedin_error=?, updated_at=?
+            WHERE linkedin_status='POSTING' AND updated_at < ?
+            """,
+            (stale_msg, now, cutoff),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET twitter_status='ERROR', twitter_error=?, updated_at=?
+            WHERE twitter_status='POSTING' AND updated_at < ?
+            """,
+            (stale_msg, now, cutoff),
+        )
+
+
 # Lightweight .env loader (so PM2 does not need env wiring).
 # Lines: KEY=VALUE, supports comments (#) and quoted values.
 def _load_dotenv(dotenv_path: str) -> None:
@@ -276,6 +308,7 @@ def index(request: Request):
 
 @app.get("/api/jobs")
 def list_jobs():
+    _mark_stale_social_postings(max_age_min=5)
     with db_connect(DB_PATH) as conn:
         rows = conn.execute(
             """

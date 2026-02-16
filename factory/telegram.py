@@ -1,3 +1,4 @@
+import html
 import os
 import re
 from datetime import datetime, timezone
@@ -10,8 +11,8 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _strip_html_to_text(html: str) -> str:
-    s = (html or "")
+def _strip_html_to_text(html_text: str) -> str:
+    s = (html_text or "")
     s = re.sub(r"(?is)<script.*?</script>", " ", s)
     s = re.sub(r"(?is)<style.*?</style>", " ", s)
     s = re.sub(r"(?is)<br\s*/?>", "\n", s)
@@ -101,6 +102,19 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
         return None
 
 
+def _to_telegram_html(text: str) -> str:
+    # Convert markdown-like **bold** to Telegram HTML <b>..</b> and escape everything else.
+    src = text or ""
+    out: list[str] = []
+    pos = 0
+    for m in re.finditer(r"\*\*([^*\n][^*]*?)\*\*", src):
+        out.append(html.escape(src[pos:m.start()]))
+        out.append("<b>" + html.escape(m.group(1).strip()) + "</b>")
+        pos = m.end()
+    out.append(html.escape(src[pos:]))
+    return "".join(out)
+
+
 def build_telegram_post_ru(*, title: str, description: str, content_html: str, url: str, include_link: bool = True) -> str:
     body = _strip_html_to_text(content_html)
     body = _truncate(body, 7000)
@@ -141,35 +155,36 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
 def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: str | None = None) -> dict[str, Any]:
     base = f"https://api.telegram.org/bot{bot_token}"
 
-    # Telegram caption limit for media posts is 1024 chars.
-    caption = _truncate((text or "").strip(), 1000)
+    full_text = _truncate((text or "").strip(), 3900)
+    html_text = _to_telegram_html(full_text)
 
-    if photo_abs_path:
+    # Caption is limited to 1024, so use photo+caption only for short posts.
+    if photo_abs_path and len(full_text) <= 1000:
         try:
             with open(photo_abs_path, "rb") as f:
                 files = {"photo": f}
                 data = {
                     "chat_id": chat_id,
-                    "caption": caption,
+                    "caption": html_text,
+                    "parse_mode": "HTML",
                 }
                 rp = requests.post(base + "/sendPhoto", data=data, files=files, timeout=90)
             if rp.status_code >= 400:
                 raise RuntimeError(f"sendPhoto failed: {rp.status_code} {rp.text}")
             sent_photo = rp.json()
-            return {"photo": sent_photo, "message": sent_photo, "mode": "photo_caption", "sent_text": caption}
+            return {"photo": sent_photo, "message": sent_photo, "mode": "photo_caption", "sent_text": full_text}
         except Exception:
             pass
 
-    msg_text = _truncate((text or "").strip(), 3900)
     rm = requests.post(
         base + "/sendMessage",
-        data={"chat_id": chat_id, "text": msg_text, "disable_web_page_preview": False},
+        data={"chat_id": chat_id, "text": html_text, "parse_mode": "HTML", "disable_web_page_preview": False},
         timeout=60,
     )
     if rm.status_code >= 400:
         raise RuntimeError(f"sendMessage failed: {rm.status_code} {rm.text}")
     msg = rm.json()
-    return {"photo": None, "message": msg, "mode": "text", "sent_text": msg_text}
+    return {"photo": None, "message": msg, "mode": "text", "sent_text": full_text}
 
 
 def telegram_message_url(chat_id: str, message_id: int | None) -> str | None:
