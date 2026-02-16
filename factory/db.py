@@ -153,6 +153,25 @@ def db_init(path: str) -> None:
         )
 
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS social_posts (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              job_id TEXT NOT NULL,
+              channel TEXT NOT NULL,
+              content_text TEXT,
+              content_json TEXT,
+              remote_url TEXT,
+              status TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS social_posts_job_channel_idx ON social_posts(job_id, channel, created_at);"
+        )
+
+
 @contextmanager
 def db_connect(path: str):
     conn = sqlite3.connect(path)

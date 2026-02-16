@@ -529,4 +529,9 @@ def post_job_to_linkedin(
     asset, upload_url = linkedin_register_image_upload(access_token=access_token, owner_urn=author_urn)
     linkedin_upload_image(upload_url=upload_url, image_bytes=img_bytes, mime=mime)
 
-    return linkedin_create_image_post(access_token=access_token, author_urn=author_urn, text=text, asset_urn=asset, title=title)
+    api_response = linkedin_create_image_post(access_token=access_token, author_urn=author_urn, text=text, asset_urn=asset, title=title)
+    return {
+        "api_response": api_response,
+        "sent_text": text,
+        "author_urn": author_urn,
+    }

@@ -96,6 +96,26 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _save_social_post(
+    *,
+    job_id: str,
+    channel: str,
+    content_text: str | None,
+    content_json: dict[str, Any] | list[Any] | None,
+    remote_url: str | None,
+    status: str,
+) -> None:
+    payload = json.dumps(content_json, ensure_ascii=False) if content_json is not None else None
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO social_posts (job_id, channel, content_text, content_json, remote_url, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (job_id, channel, content_text, payload, remote_url, status, utcnow_iso()),
+        )
+
+
 
 # Lightweight .env loader (so PM2 does not need env wiring).
 # Lines: KEY=VALUE, supports comments (#) and quoted values.
@@ -1552,14 +1572,28 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
             )
 
             post_id = None
+            sent_text = None
+            api_resp = resp
             if isinstance(resp, dict):
-                post_id = resp.get("id") or resp.get("urn") or resp.get("value")
+                if isinstance(resp.get("api_response"), dict):
+                    api_resp = resp.get("api_response")
+                    sent_text = (resp.get("sent_text") or "").strip() or None
+                post_id = (api_resp or {}).get("id") or (api_resp or {}).get("urn") or (api_resp or {}).get("value")
 
             with db_connect(DB_PATH) as conn:
                 conn.execute(
                     "UPDATE jobs SET linkedin_status='POSTED', linkedin_post_url=?, linkedin_posted_at=?, linkedin_error=NULL, updated_at=? WHERE id=?",
                     (post_id, utcnow_iso(), utcnow_iso(), job_id),
                 )
+
+            _save_social_post(
+                job_id=job_id,
+                channel="linkedin",
+                content_text=sent_text,
+                content_json=api_resp if isinstance(api_resp, dict) else None,
+                remote_url=post_id,
+                status="POSTED",
+            )
 
             log_event(DB_PATH, job_id, "READY", "Posted to LinkedIn")
         except Exception as e:
@@ -1585,7 +1619,7 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not bot_token or not chat_id:
         raise HTTPException(status_code=500, detail="Missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
 
-    include_link = bool(payload.get("includeLink", True))
+    include_link = bool(payload.get("includeLink", False))
 
     with db_connect(DB_PATH) as conn:
         job = conn.execute(
@@ -1636,12 +1670,23 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
             )
             message_id = (((res.get("message") or {}).get("result") or {}).get("message_id"))
             post_url = telegram_message_url(chat_id, message_id)
+            sent_text = (res.get("sent_text") or text or "").strip()
+            mode = (res.get("mode") or "unknown").strip()
 
             with db_connect(DB_PATH) as conn:
                 conn.execute(
                     "UPDATE jobs SET telegram_status='POSTED', telegram_post_url=?, telegram_posted_at=?, telegram_error=NULL, updated_at=? WHERE id=?",
                     (post_url, utcnow_iso(), utcnow_iso(), job_id),
                 )
+
+            _save_social_post(
+                job_id=job_id,
+                channel="telegram",
+                content_text=sent_text,
+                content_json={"mode": mode, "chat_id": chat_id, "response": res},
+                remote_url=post_url,
+                status="POSTED",
+            )
             log_event(DB_PATH, job_id, "READY", "Posted to Telegram")
         except Exception as e:
             msg = f"Telegram publish failed: {e}"
@@ -1709,6 +1754,15 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
                     "UPDATE jobs SET twitter_status='POSTED', twitter_post_url=?, twitter_posted_at=?, twitter_error=NULL, updated_at=? WHERE id=?",
                     (post_url, utcnow_iso(), utcnow_iso(), job_id),
                 )
+
+            _save_social_post(
+                job_id=job_id,
+                channel="twitter",
+                content_text="\n\n---\n\n".join(tweets),
+                content_json={"tweets": tweets, "response": out},
+                remote_url=post_url,
+                status="POSTED",
+            )
             log_event(DB_PATH, job_id, "READY", "Posted X/Twitter thread")
         except Exception as e:
             msg = f"X/Twitter publish failed: {e}"
