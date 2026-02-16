@@ -243,23 +243,33 @@ def build_linkedin_post(
     min_len = min(target - 120, max(900, int(target * 0.55)))
 
     def _normalize_text(txt: str) -> str:
-        txt = (txt or "").strip()
-        txt = re.sub(r"\s+", " ", txt)
-        return txt
+        txt = (txt or "")
+        txt = txt.replace("\r\n", "\n").replace("\r", "\n")
+        # Keep line breaks for LinkedIn readability; normalize spaces per line.
+        lines = []
+        for ln in txt.split("\n"):
+            line = re.sub(r"[\t ]+", " ", ln).strip()
+            lines.append(line)
+        txt = "\n".join(lines)
+        # Collapse excessive blank lines (max one empty line between blocks).
+        txt = re.sub(r"\n{3,}", "\n\n", txt)
+        return txt.strip()
 
     if api_key:
         sys = (
             "You are a senior B2B founder ghostwriter. "
-            "Write a LinkedIn post in FIRST PERSON as the author described below: web developer, startup founder, product owner, AI automation specialist, Shopify expert. "
+            "Write a LinkedIn post in FIRST PERSON as the author described below. "
             "Preserve the core meaning and key factual claims from SOURCE; do not invent facts. "
             "Frame the narrative as: I learned this, tested this, and I share this because it is useful. "
-            "Plain text only. No markdown. No emojis. "
+            "In the voice, mention only the most relevant role(s) for this topic (1-2 max), not the full list every time. Plain text only. No markdown. No emojis. "
             "Tone: practical, credible, useful, and specific. No hype. "
             "Structure:\n"
-            "- 1-2 line hook\n"
-            "- 6-10 short bullets (1 line each)\n"
-            "- 1 short paragraph with a clear conclusion\n"
-            "- 3-6 hashtags\n"
+            "- Use clear paragraph breaks and readable spacing for LinkedIn feed.\n"
+            "- Add 2-4 short section headers ending with a colon (for example: What changed:, What worked:, My takeaway:).\n"
+            "- Keep one empty line between sections and before hashtags.\n"
+            "- 6-10 short bullets (1 line each).\n"
+            "- 1 short paragraph with a clear conclusion.\n"
+            "- 3-6 hashtags.\n"
             "Hard constraints:\n"
             "- Preserve all important factual points from SOURCE in your own wording.\n"
             f"- Length must be between {min_len} and {target} characters.\n"
@@ -299,7 +309,7 @@ def build_linkedin_post(
         if text and len(text) < min_len:
             expand = (
                 f"Expand this LinkedIn post to between {min_len} and {target} characters. "
-                "Keep first-person voice and structure, add concrete details and examples, no fluff, plain text only.\n\n"
+                "Keep first-person voice and structure with clean paragraph breaks and section headers, add concrete details and examples, no fluff, plain text only.\n\n"
                 f"POST:\n{text}"
             )
             expanded = _call_llm(expand)
@@ -323,7 +333,7 @@ def build_linkedin_post(
     post = (
         f"{clean_title}\n\n"
         f"{clean_desc}\n\n"
-        "As a web developer, startup founder, product owner, and AI automation specialist, here is what I found useful in practice:\n"
+        "From my operator perspective, here is what I found useful in practice:\n"
         f"{insights}\n\n"
         "Execution framework I use:\n"
         "- Define one measurable goal per creative cycle\n"
