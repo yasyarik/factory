@@ -12,6 +12,13 @@ from typing import Any
 
 USER_AGENT = "myugc-content-factory-topic-discovery/1.0"
 
+BAD_TOPIC_PHRASES = (
+    "frankly shocking",
+    "what kind of business model",
+    "don't pay for the upgrade",
+    "later addressed",
+    "reversed course",
+)
 
 
 def _norm_space(s: str) -> str:
@@ -46,6 +53,60 @@ def _http_get_json(url: str, timeout: int = 18) -> Any:
         raw = resp.read().decode("utf-8", errors="replace")
     return json.loads(raw)
 
+
+
+def _clean_candidate_topic(raw_topic: str, direction: str) -> str | None:
+    t = _norm_space(raw_topic)
+    if not t:
+        return None
+
+    # Remove markdown/noise artifacts.
+    t = t.replace("*", " ").replace("`", " ")
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = re.sub(r"\s+", " ", t).strip(' -|"\'[]{}')
+
+    if any(ch in t for ch in "[]{}"):
+        return None
+
+    # Fix obvious broken auto-suggest fragments.
+    t = re.sub(r"(?i)^what i\b", "What is", t)
+    t = re.sub(r"(?i)\bwhat i\b", "what is", t)
+
+    lo = t.lower()
+    if any(b in lo for b in BAD_TOPIC_PHRASES):
+        return None
+    if "be like" in lo or re.search(r"@\w+", t) or re.search(r"\bpt\s*\d+\b", lo):
+        return None
+
+    # Too many sentence fragments usually means forum rant, not article title.
+    if len(re.findall(r"[.!?]", t)) > 2:
+        parts = [x.strip() for x in re.split(r"[.!?]+\s+", t) if x.strip()]
+        t = parts[0] if parts else t
+
+    # Drop explicit first-person complaint style lines.
+    if lo.startswith(("i ", "we ", "my ", "our ")) and len(t) > 70:
+        return None
+
+    # Keep clean length for title candidates.
+    if len(t) > 100:
+        t = t[:100].rsplit(" ", 1)[0].strip()
+
+    t = _to_topic_phrase(t)
+    t = _normalize_topic_case(t)
+
+    # Basic quality gates.
+    if len(t) < 14 or len(t) > 100:
+        return None
+    if len(re.findall(r"[A-Za-z]", t)) < 10:
+        return None
+
+    # Ensure topic still relates to direction at least weakly.
+    dt = _tokens(direction)
+    tt = _tokens(t)
+    if dt and not (dt & tt):
+        return None
+
+    return t
 
 
 def _to_topic_phrase(q: str) -> str:
@@ -224,6 +285,7 @@ def _fetch_duckduckgo(direction: str, limit: int = 50) -> list[dict[str, Any]]:
     items = data if isinstance(data, list) else []
     for it in items[:25]:
         raw_phrase=it.get("phrase") if isinstance(it, dict) else str(it or "")
+        raw_phrase = re.sub(r'^[\[\]\(\)"\'`]+|[\[\]\(\)"\'`]+$', '', raw_phrase).strip()
         phrase = _to_topic_phrase(raw_phrase)
         if len(phrase) < 12:
             continue
@@ -266,8 +328,8 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
 
     agg: dict[str, dict[str, Any]] = {}
     for item in raw:
-        q = _to_topic_phrase(item.get("question") or "")
-        if len(q) < 12:
+        q = _clean_candidate_topic(item.get("question") or "", direction)
+        if not q:
             continue
         k = _key(q)
         if not k:
@@ -297,7 +359,9 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
 
     scored: list[dict[str, Any]] = []
     for _, node in agg.items():
-        topic = _normalize_topic_case(node["topic"])
+        topic = _clean_candidate_topic(node["topic"], direction)
+        if not topic:
+            continue
         topic_tokens = _tokens(topic)
 
         # Weighted scoring (recency + engagement + cross-source + business fit)
@@ -354,7 +418,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
         # Fallback: include additional high-fit candidates even with low score.
         fallback = []
         for node in agg.values():
-            topic = _normalize_topic_case(node.get("topic") or "")
+            topic = _clean_candidate_topic(node.get("topic") or "", direction)
             if not topic:
                 continue
             fit2 = 0.0
@@ -365,7 +429,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
                 fit2 = match2 / max(1, len(dir_tokens))
             required2 = 2 if len(dir_tokens) >= 3 else 1
             has_anchor = (not anchor_tokens) or bool(anchor_tokens & tt)
-            if match2 >= required2 and has_anchor and fit2 >= 0.12 and not any(x.get(topic) == topic for x in items):
+            if match2 >= required2 and has_anchor and fit2 >= 0.12 and not any(x.get("topic") == topic for x in items):
                 fallback.append(
                     {
                         "topic": topic,
