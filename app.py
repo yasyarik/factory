@@ -167,7 +167,7 @@ def _load_dotenv(dotenv_path: str) -> None:
                 v = v.strip()
                 if len(v) >= 2 and (v[0] == v[-1]) and (v[0] in ("\"", "'")):
                     v = v[1:-1]
-                if k and (k not in os.environ):
+                if k and ((k not in os.environ) or not (os.environ.get(k) or "").strip()):
                     os.environ[k] = v
     except Exception:
         # Never fail startup on env parsing.
@@ -207,6 +207,21 @@ def _env_file_values(path: str) -> dict[str, str]:
     except Exception:
         return out
     return out
+
+
+def _normalize_linkedin_org_urn(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    # Accept either full URN (urn:li:organization:123) or plain numeric ID.
+    if raw.lower().startswith("urn:li:organization:"):
+        tail = raw.split(":")[-1].strip()
+        if tail.isdigit():
+            return f"urn:li:organization:{tail}"
+    digits = re.sub(r"\D+", "", raw)
+    if digits:
+        return f"urn:li:organization:{digits}"
+    raise ValueError("LINKEDIN_ORG_URN must be organization numeric id or urn:li:organization:<id>")
 
 
 def _env_write_updates(path: str, updates: dict[str, str], clears: set[str]) -> None:
@@ -316,7 +331,8 @@ def list_jobs():
                    draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url,
                    linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error,
                    telegram_status, telegram_post_url, telegram_posted_at, telegram_error,
-                   twitter_status, twitter_post_url, twitter_posted_at, twitter_error
+                   twitter_status, twitter_post_url, twitter_posted_at, twitter_error,
+                   product_mode
             FROM jobs
             ORDER BY created_at DESC
             LIMIT 500
@@ -361,6 +377,7 @@ def list_jobs():
                 "twitterPostUrl": r[25],
                 "twitterPostedAt": r[26],
                 "twitterError": r[27],
+                "productMode": bool(r[28]),
             }
         )
 
@@ -383,6 +400,7 @@ async def create_job(request: Request):
 
     # slug can be empty; generate later
     slug = (body.get("slug") or "").strip() or None
+    product_mode = bool(body.get("productMode", False))
 
     job_id = secrets.token_hex(12)
     now = utcnow_iso()
@@ -390,10 +408,10 @@ async def create_job(request: Request):
     with db_connect(DB_PATH) as conn:
         conn.execute(
             """
-            INSERT INTO jobs (id, topic, slug, status, category, hero_image, visibility, created_at, updated_at)
-            VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?)
+            INSERT INTO jobs (id, topic, slug, status, category, hero_image, visibility, product_mode, created_at, updated_at)
+            VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?)
             """,
-            (job_id, topic, slug, category, hero_image, visibility, now, now),
+            (job_id, topic, slug, category, hero_image, visibility, 1 if product_mode else 0, now, now),
         )
 
     log_event(DB_PATH, job_id, "NEW", "Job created")
@@ -555,14 +573,14 @@ def get_logs(job_id: str):
 def generate(job_id: str):
     with db_connect(DB_PATH) as conn:
         job = conn.execute(
-            "SELECT id, topic, slug, status, category, hero_image, draft_html FROM jobs WHERE id = ?",
+            "SELECT id, topic, slug, status, category, hero_image, draft_html, product_mode FROM jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    _id, topic, slug, status, category, hero_image, draft_html = job
+    _id, topic, slug, status, category, hero_image, draft_html, product_mode = job
 
     log_event(DB_PATH, job_id, "INFO", "Starting generation")
 
@@ -586,6 +604,7 @@ def generate(job_id: str):
                 hero_image=hero_image,
                 slug_hint=slug,
                 source_html=_sanitize_source_html(draft_html) if (draft_html and status != "NEW") else None,
+                product_mode=bool(product_mode),
                 previous=draft,
                 problems=problems if attempt > 1 else None,
             )
@@ -849,7 +868,8 @@ def get_job(job_id: str):
                    draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url,
                    linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error,
                    telegram_status, telegram_post_url, telegram_posted_at, telegram_error,
-                   twitter_status, twitter_post_url, twitter_posted_at, twitter_error
+                   twitter_status, twitter_post_url, twitter_posted_at, twitter_error,
+                   product_mode
             FROM jobs
             WHERE id=?
             """,
@@ -895,6 +915,7 @@ def get_job(job_id: str):
             "twitterPostUrl": r[25],
             "twitterPostedAt": r[26],
             "twitterError": r[27],
+            "productMode": bool(r[28]),
         },
     }
 
@@ -954,6 +975,9 @@ async def update_job(job_id: str, request: Request):
         if visibility not in ("public", "hidden"):
             raise HTTPException(status_code=400, detail="visibility must be public|hidden")
         set_if("visibility", visibility)
+
+    if isinstance(body.get("productMode"), bool):
+        set_if("product_mode", 1 if body.get("productMode") else 0)
 
     if not updates:
         return {"success": True}
@@ -1063,7 +1087,7 @@ def _ap_read_settings() -> dict[str, Any]:
     with db_connect(DB_PATH) as conn:
         r = conn.execute(
             """
-            SELECT enabled, times_per_day, channels_json, timezone, start_hour, end_hour, last_slot_key, last_run_at
+            SELECT enabled, times_per_day, channels_json, timezone, start_hour, end_hour, linkedin_include_link, telegram_include_link, last_slot_key, last_run_at
             FROM autopublish_settings
             WHERE id=1
             """
@@ -1077,6 +1101,8 @@ def _ap_read_settings() -> dict[str, Any]:
             "timezone": "UTC",
             "start_hour": 9,
             "end_hour": 21,
+            "linkedin_include_link": False,
+            "telegram_include_link": False,
             "last_slot_key": None,
             "last_run_at": None,
         }
@@ -1098,24 +1124,27 @@ def _ap_read_settings() -> dict[str, Any]:
         "timezone": (r[3] or "UTC").strip() or "UTC",
         "start_hour": int(r[4] if r[4] is not None else 9),
         "end_hour": int(r[5] if r[5] is not None else 21),
-        "last_slot_key": r[6],
-        "last_run_at": r[7],
+        "linkedin_include_link": bool(r[6]),
+        "telegram_include_link": bool(r[7]),
+        "last_slot_key": r[8],
+        "last_run_at": r[9],
     }
 
 
-def _ap_write_settings(*, enabled: bool, times_per_day: int, channels: list[str], timezone_name: str, start_hour: int, end_hour: int, last_slot_key: str | None = None, last_run_at: str | None = None) -> None:
+def _ap_write_settings(*, enabled: bool, times_per_day: int, channels: list[str], timezone_name: str, start_hour: int, end_hour: int, linkedin_include_link: bool = False, telegram_include_link: bool = False, last_slot_key: str | None = None, last_run_at: str | None = None) -> None:
     ch_json = json.dumps(channels)
     with db_connect(DB_PATH) as conn:
         conn.execute(
             """
             UPDATE autopublish_settings
             SET enabled=?, times_per_day=?, channels_json=?, timezone=?, start_hour=?, end_hour=?,
+                linkedin_include_link=?, telegram_include_link=?,
                 last_slot_key=COALESCE(?, last_slot_key),
                 last_run_at=COALESCE(?, last_run_at),
                 updated_at=?
             WHERE id=1
             """,
-            (1 if enabled else 0, times_per_day, ch_json, timezone_name, start_hour, end_hour, last_slot_key, last_run_at, utcnow_iso()),
+            (1 if enabled else 0, times_per_day, ch_json, timezone_name, start_hour, end_hour, 1 if linkedin_include_link else 0, 1 if telegram_include_link else 0, last_slot_key, last_run_at, utcnow_iso()),
         )
 
 
@@ -1177,6 +1206,10 @@ def _ap_log_run(started_at: str, finished_at: str, trigger: str, job_id: str | N
 
 def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
     if not _AUTOPUBLISH_LOCK.acquire(blocking=False):
+        if trigger == "schedule":
+            started = utcnow_iso()
+            result = {"success": False, "status": "BUSY", "message": "autopublish already running"}
+            _ap_log_run(started, utcnow_iso(), trigger, None, "BUSY", result)
         return {"success": False, "status": "BUSY", "message": "autopublish already running"}
 
     started = utcnow_iso()
@@ -1219,9 +1252,9 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
         for ch in channels:
             try:
                 if ch == "linkedin":
-                    linkedin_publish(job_id, {"as": "member", "includeLink": True})
+                    linkedin_publish(job_id, {"includeLink": bool(settings.get("linkedin_include_link"))})
                 elif ch == "telegram":
-                    telegram_publish(job_id, {"includeLink": True})
+                    telegram_publish(job_id, {"includeLink": bool(settings.get("telegram_include_link"))})
                 elif ch == "twitter":
                     twitter_publish(job_id, {})
                 else:
@@ -1258,6 +1291,8 @@ def _autopublish_loop() -> None:
                             timezone_name=(st.get("timezone") or "UTC"),
                             start_hour=int(st.get("start_hour") or 9),
                             end_hour=int(st.get("end_hour") or 21),
+                            linkedin_include_link=bool(st.get("linkedin_include_link")),
+                            telegram_include_link=bool(st.get("telegram_include_link")),
                             last_slot_key=key,
                             last_run_at=utcnow_iso(),
                         )
@@ -1277,13 +1312,31 @@ def _autopublish_start_scheduler() -> None:
 
 @app.get("/api/autopublish/settings")
 def autopublish_get_settings():
+    _autopublish_start_scheduler()
     st = _ap_read_settings()
     slots = _ap_slots(st.get("times_per_day") or 3, st.get("start_hour") or 9, st.get("end_hour") or 21)
     return {"success": True, **st, "slots": slots}
 
 
+@app.get("/api/autopublish/health")
+def autopublish_health():
+    _autopublish_start_scheduler()
+    st = _ap_read_settings()
+    now_local = _ap_now_local(st.get("timezone") or "UTC")
+    slots = _ap_slots(st.get("times_per_day") or 3, st.get("start_hour") or 9, st.get("end_hour") or 21)
+    alive = bool(_AUTOPUBLISH_THREAD and _AUTOPUBLISH_THREAD.is_alive())
+    return {
+        "success": True,
+        "threadAlive": alive,
+        "nowLocal": now_local.isoformat(),
+        "slots": slots,
+        **st,
+    }
+
+
 @app.put("/api/autopublish/settings")
 async def autopublish_set_settings(request: Request):
+    _autopublish_start_scheduler()
     body = await request.json()
 
     enabled = bool(body.get("enabled", False))
@@ -1296,6 +1349,8 @@ async def autopublish_set_settings(request: Request):
     channels = [str(x).strip().lower() for x in channels if str(x).strip().lower() in ("linkedin", "telegram", "twitter")]
 
     timezone_name = (body.get("timezone") or "UTC").strip() or "UTC"
+    linkedin_include_link = bool(body.get("linkedinIncludeLink", body.get("linkedin_include_link", False)))
+    telegram_include_link = bool(body.get("telegramIncludeLink", body.get("telegram_include_link", False)))
     start_hour = int(body.get("startHour") if body.get("startHour") is not None else 9)
     end_hour = int(body.get("endHour") if body.get("endHour") is not None else 21)
     start_hour = max(0, min(23, start_hour))
@@ -1309,6 +1364,8 @@ async def autopublish_set_settings(request: Request):
         timezone_name=timezone_name,
         start_hour=start_hour,
         end_hour=end_hour,
+        linkedin_include_link=linkedin_include_link,
+        telegram_include_link=telegram_include_link,
         last_slot_key=st.get("last_slot_key"),
         last_run_at=st.get("last_run_at"),
     )
@@ -1318,12 +1375,14 @@ async def autopublish_set_settings(request: Request):
 
 @app.post("/api/autopublish/run")
 def autopublish_run_now():
+    _autopublish_start_scheduler()
     out = _run_autopublish(trigger="manual")
     return {"success": True, "result": out}
 
 
 @app.get("/api/autopublish/runs")
 def autopublish_runs(limit: int = 20):
+    _autopublish_start_scheduler()
     lim = max(1, min(100, int(limit or 20)))
     with db_connect(DB_PATH) as conn:
         rows = conn.execute(
@@ -1385,6 +1444,11 @@ async def settings_social_put(request: Request):
         if key not in SOCIAL_ENV_KEYS:
             continue
         val = str(v or "").strip()
+        if key == "LINKEDIN_ORG_URN" and val:
+            try:
+                val = _normalize_linkedin_org_urn(val)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
         if val:
             updates[key] = val
 
@@ -1530,9 +1594,9 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not client_id or not client_secret:
         raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET")
 
-    mode = (payload.get("as") or "member").strip().lower()
+    mode = (payload.get("as") or "").strip().lower()
     if mode not in ("member", "org"):
-        mode = "member"
+        mode = ""
 
 
     include_link = bool(payload.get("includeLink"))
@@ -1544,6 +1608,13 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
 
     org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip() or None
     org_urn = (payload.get("orgUrn") or "").strip() or org_env or (auth.get("org_urn") or "").strip() or None
+    # Default to member posting. Organization is used only when explicitly requested.
+    # Having LINKEDIN_ORG_URN configured should not change default behavior.
+    if mode == "org":
+        if not org_urn:
+            raise HTTPException(status_code=400, detail="Missing LinkedIn org URN")
+    else:
+        mode = "member"
 
     with db_connect(DB_PATH) as conn:
         job = conn.execute(
@@ -1676,6 +1747,7 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
     hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename else ""
     if not hero_filename or not os.path.exists(hero_abs):
         hero_abs = None
+    hero_public_url = f"https://myugc.studio/blog/{hero_filename}" if hero_filename else None
 
     with db_connect(DB_PATH) as conn:
         conn.execute(
@@ -1700,6 +1772,7 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
                 chat_id=chat_id,
                 text=text,
                 photo_abs_path=hero_abs,
+                hero_public_url=hero_public_url,
             )
             message_id = (((res.get("message") or {}).get("result") or {}).get("message_id"))
             post_url = telegram_message_url(chat_id, message_id)

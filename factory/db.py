@@ -26,6 +26,7 @@ def db_init(path: str) -> None:
               sources_json TEXT,
               visibility TEXT NOT NULL DEFAULT 'public',
               published_url TEXT,
+              product_mode INTEGER NOT NULL DEFAULT 0,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
@@ -41,6 +42,8 @@ def db_init(path: str) -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN sources_json TEXT;")
         if "visibility" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public';")
+        if "product_mode" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN product_mode INTEGER NOT NULL DEFAULT 0;")
 
         if 'linkedin_status' not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_status TEXT;")
@@ -120,6 +123,8 @@ def db_init(path: str) -> None:
               timezone TEXT NOT NULL DEFAULT 'UTC',
               start_hour INTEGER NOT NULL DEFAULT 9,
               end_hour INTEGER NOT NULL DEFAULT 21,
+              linkedin_include_link INTEGER NOT NULL DEFAULT 0,
+              telegram_include_link INTEGER NOT NULL DEFAULT 0,
               last_slot_key TEXT,
               last_run_at TEXT,
               updated_at TEXT NOT NULL
@@ -151,6 +156,12 @@ def db_init(path: str) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS autopublish_runs_started_idx ON autopublish_runs(started_at);"
         )
+
+        ap_cols = [r[1] for r in conn.execute("PRAGMA table_info(autopublish_settings);").fetchall()]
+        if "linkedin_include_link" not in ap_cols:
+            conn.execute("ALTER TABLE autopublish_settings ADD COLUMN linkedin_include_link INTEGER NOT NULL DEFAULT 0;")
+        if "telegram_include_link" not in ap_cols:
+            conn.execute("ALTER TABLE autopublish_settings ADD COLUMN telegram_include_link INTEGER NOT NULL DEFAULT 0;")
 
 
         conn.execute(

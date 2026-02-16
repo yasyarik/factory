@@ -5,6 +5,7 @@ import urllib.request
 from typing import Any
 
 from .landing import _slugify
+from .product_kb import rank_product_knowledge
 
 
 SYSTEM_PROMPT = """
@@ -44,6 +45,7 @@ PRODUCT CONTEXT RULES:
 - If the article context includes recommending a SaaS/tool/platform for UGC creation, content automation, or ecommerce creative workflows, use "My UGC Studio" as the concrete product example.
 - Never invent fictional brand names like "AI Content Studio" or similar abstract product brands.
 - If a product mention is not contextually needed, stay neutral with generic terms.
+- If user JSON includes productKnowledge, use only relevant facts from it (features, pricing, rights, integrations) and keep claims consistent with provided facts.
 
 SOURCE INPUT (optional):
 - If user JSON includes sourceHtml, rewrite that content into a better-structured article following ALL rules.
@@ -173,21 +175,100 @@ def _extract_sources(meta: dict[str, Any] | None, limit: int = 10) -> tuple[list
 
     return out, queries
 
+def _sanitize_json_text(s: str) -> str:
+    """Escape raw control chars inside JSON string literals.
+
+    Gemini occasionally returns unescaped control characters inside string
+    values (most often in large HTML fragments), which breaks json.loads().
+    """
+    if not s:
+        return s
+
+    out: list[str] = []
+    in_string = False
+    escaped = False
+
+    for ch in s:
+        if not in_string:
+            out.append(ch)
+            if ch == '"':
+                in_string = True
+            continue
+
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+
+        if ch == "\\":
+            out.append(ch)
+            escaped = True
+            continue
+
+        if ch == '"':
+            out.append(ch)
+            in_string = False
+            continue
+
+        code = ord(ch)
+        if code < 0x20:
+            if code == 10:
+                out.append("\\n")
+            elif code == 13:
+                out.append("\\r")
+            elif code == 9:
+                out.append("\\t")
+            elif code == 8:
+                out.append("\\b")
+            elif code == 12:
+                out.append("\\f")
+            else:
+                out.append(f"\\u{code:04x}")
+            continue
+
+        out.append(ch)
+
+    return ''.join(out)
+
 
 def _parse_json_strict(s: str) -> dict[str, Any]:
     s = (s or "").strip()
     s = re.sub(r"^```(?:json)?\s*", "", s)
     s = re.sub(r"\s*```$", "", s)
 
-    try:
-        return json.loads(s)
-    except Exception:
-        # Model sometimes adds leading/trailing text or extra lines.
-        start = s.find("{")
-        end = s.rfind("}")
-        if start >= 0 and end > start:
-            return json.loads(s[start : end + 1])
-        raise
+    candidates: list[str] = [s]
+
+    # Model sometimes adds leading/trailing text or extra lines.
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        clipped = s[start : end + 1]
+        if clipped != s:
+            candidates.append(clipped)
+
+    seen: set[str] = set()
+    last_err: Exception | None = None
+
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+
+        try:
+            return json.loads(cand)
+        except Exception as e:
+            last_err = e
+
+        sanitized = _sanitize_json_text(cand)
+        if sanitized != cand:
+            try:
+                return json.loads(sanitized)
+            except Exception as e:
+                last_err = e
+
+    if last_err is not None:
+        raise last_err
+    raise ValueError("Failed to parse model JSON output")
 
 
 
@@ -199,6 +280,7 @@ def generate_draft(
     hero_image: str | None,
     slug_hint: str | None,
     source_html: str | None = None,
+    product_mode: bool = False,
     previous: dict[str, Any] | None = None,
     problems: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -215,6 +297,11 @@ def generate_draft(
         "site": "https://myugc.studio",
         "basePath": "/blog/",
     }
+
+    if product_mode:
+        product_knowledge = rank_product_knowledge(topic, limit=14)
+        if product_knowledge:
+            user["productKnowledge"] = product_knowledge
 
     # Reuse existing server env conventions (SaaS/API use GOOGLE_API_KEY).
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")

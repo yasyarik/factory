@@ -163,6 +163,7 @@
                 <input id="topic" style="flex: 1; min-width: 260px" placeholder="Topic (EN)" />
                 <input id="category" style="width: 220px" placeholder="Category (optional)" />
                 <input id="hero" style="width: 280px" placeholder="Hero image (optional)" />
+                <label class="pill"><input type="checkbox" id="productMode" /> Product mode</label>
                 <button class="primary" id="createBtn">Create</button>
               </div>
               <div class="muted" style="margin-top: 10px;">Uses default visibility from Settings. Tip: set `GEMINI_API_KEY` in factory env to enable AI generation.</div>
@@ -307,6 +308,10 @@
               <label class="pill"><input type="checkbox" id="apChTelegram" checked /> Telegram</label>
               <label class="pill"><input type="checkbox" id="apChTwitter" checked /> X</label>
             </div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" id="apLiIncludeLink" /> LinkedIn include link</label>
+              <label class="pill"><input type="checkbox" id="apTgIncludeLink" /> Telegram include link</label>
+            </div>
           </div>
 
           <div class="row" style="margin-top: 10px;">
@@ -363,7 +368,7 @@
                 <input id="setLiPersonUrn" style="flex:1; min-width:260px" placeholder="LINKEDIN_PERSON_URN" />
               </div>
               <div class="row">
-                <input id="setLiOrgUrn" style="flex:1; min-width:260px" placeholder="LINKEDIN_ORG_URN" />
+                <input id="setLiOrgUrn" style="flex:1; min-width:260px" placeholder="LinkedIn Org ID or URN (e.g. 110609498)" />
                 <input id="setLiAuthorBio" style="flex:1; min-width:260px" placeholder="LINKEDIN_AUTHOR_BIO" />
               </div>
               <div class="row">
@@ -618,6 +623,9 @@
         var t = el('liStatusText');
         if (t) t.textContent = _li.connected ? ('Connected: ' + (_li.memberUrn || 'member')) : 'Not connected';
 
+        var modeEl = el('liAs');
+        if (modeEl) modeEl.value = _li.orgUrnConfigured ? 'org' : 'member';
+
         var orgInput = el('liOrgUrn');
         if (orgInput) {
           if (_li.orgUrn) orgInput.value = _li.orgUrn;
@@ -630,7 +638,7 @@
 
       function linkedinConnect() {
         var modeEl = el('liAs');
-        var mode = (modeEl && modeEl.value) ? modeEl.value : 'member';
+        var mode = (modeEl && modeEl.value) ? modeEl.value : (_li.orgUrnConfigured ? 'org' : 'member');
         window.location.href = resolveUrl('/linkedin/connect?as=' + encodeURIComponent(mode));
       }
 
@@ -647,7 +655,7 @@
         }
 
         var modeEl = el('liAs');
-        var mode = (modeEl && modeEl.value) ? modeEl.value : 'member';
+        var mode = (modeEl && modeEl.value) ? modeEl.value : (_li.orgUrnConfigured ? 'org' : 'member');
         var inc = !!(el('liIncludeLink') && el('liIncludeLink').checked);
         var body = { as: mode, includeLink: inc };
 
@@ -722,6 +730,8 @@
           if (el('apChLinkedin')) el('apChLinkedin').checked = ch.indexOf('linkedin') >= 0;
           if (el('apChTelegram')) el('apChTelegram').checked = ch.indexOf('telegram') >= 0;
           if (el('apChTwitter')) el('apChTwitter').checked = ch.indexOf('twitter') >= 0;
+          if (el('apLiIncludeLink')) el('apLiIncludeLink').checked = !!st.linkedin_include_link;
+          if (el('apTgIncludeLink')) el('apTgIncludeLink').checked = !!st.telegram_include_link;
 
           var slots = Array.isArray(st.slots) ? st.slots.join(', ') : '-';
           if (el('apStatus')) {
@@ -774,6 +784,8 @@
               startHour: parseInt((el('apStartHour') && el('apStartHour').value) ? el('apStartHour').value : '9', 10),
               endHour: parseInt((el('apEndHour') && el('apEndHour').value) ? el('apEndHour').value : '21', 10),
               channels: channels,
+              linkedinIncludeLink: !!(el('apLiIncludeLink') && el('apLiIncludeLink').checked),
+              telegramIncludeLink: !!(el('apTgIncludeLink') && el('apTgIncludeLink').checked),
             })
           });
           await loadAutopublish();
@@ -900,6 +912,7 @@
             body: JSON.stringify({
               topic: it.topic,
               category: category || undefined,
+              productMode: !!(el('productMode') && el('productMode').checked),
               visibility: getDefaultVisibility(),
             })
           });
@@ -958,6 +971,7 @@
               ? '<div class="muted" style="margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(j.description) + '</div>'
               : '')
             + '<div class="muted" style="margin-top:6px;">visibility: <span class="mono">' + escapeHtml(visibility) + '</span></div>'
+            + '<div class="muted" style="margin-top:4px;">product mode: <span class="mono">' + (j.productMode ? 'on' : 'off') + '</span></div>'
             + (j.linkedinStatus ? ('<div class="muted" style="margin-top:4px;">li: <span class="mono">' + escapeHtml(j.linkedinStatus) + '</span></div>') : '')
             + (j.telegramStatus ? ('<div class="muted" style="margin-top:4px;">tg: <span class="mono">' + escapeHtml(j.telegramStatus) + '</span></div>') : '')
             + (j.twitterStatus ? ('<div class="muted" style="margin-top:4px;">x: <span class="mono">' + escapeHtml(j.twitterStatus) + '</span></div>') : '');
@@ -1037,6 +1051,7 @@
               topic: topic,
               category: category || undefined,
               heroImage: heroImage || undefined,
+              productMode: !!(el('productMode') && el('productMode').checked),
               visibility: getDefaultVisibility(),
             })
           });

@@ -36,74 +36,7 @@ def _truncate(s: str, max_len: int) -> str:
     return cut.rstrip(" ,;:-")
 
 
-def _force_russian(api_key: str, model: str, text: str) -> str:
-    text = (text or "").strip()
-    if not text:
-        return text
-
-    prompt = (
-        "Перепиши текст полностью на русском языке. "
-        "Сохрани факты, цифры, структуру, CTA и хэштеги. "
-        "Английские слова оставляй только для брендов и общепринятых аббревиатур (например My UGC Studio, AI, UGC, Shopify, TikTok). "
-        "Верни только итоговый текст."
-    )
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    payload: dict[str, Any] = {
-        "contents": [{"role": "user", "parts": [{"text": prompt + "\n\nTEXT:\n" + text}]}],
-        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1500},
-    }
-    try:
-        r = requests.post(url, json=payload, timeout=60)
-        if r.status_code >= 400:
-            return text
-        data = r.json()
-        out = data["candidates"][0]["content"]["parts"][0]["text"]
-        out = out.replace("\r\n", "\n").replace("\r", "\n")
-        out = re.sub(r"\n{3,}", "\n\n", out).strip()
-        return out or text
-    except Exception:
-        return text
-
-
-def _generate_ru_post(api_key: str, model: str, *, title: str, description: str, body: str) -> str | None:
-    prompt = (
-        "Ты редактор Telegram-канала про маркетинг, UGC и AI. "
-        "Напиши пост на РУССКОМ языке по источнику, сохраняя факты и практическую пользу. "
-        "Стиль: живой, экспертный, без воды, без выдуманных фактов. "
-        "Требования: "
-        "1) Хук 1-2 строки. "
-        "2) 8-12 буллетов с конкретикой и цифрами. "
-        "3) Блок Практические шаги (3-5 пунктов). "
-        "4) Вывод + CTA. "
-        "5) 3-6 релевантных хэштегов. "
-        "6) Минимум 1000 символов. "
-        "7) Если по контексту нужен SaaS для UGC/автоматизации, используй бренд My UGC Studio. "
-        "Верни только готовый текст поста."
-    )
-    user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\n"
-
-    gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-    payload: dict[str, Any] = {
-        "contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + user}]}],
-        "generationConfig": {"temperature": 0.6, "maxOutputTokens": 1600},
-    }
-    try:
-        r = requests.post(gen_url, json=payload, timeout=60)
-        if r.status_code >= 400:
-            return None
-        data = r.json()
-        txt = data["candidates"][0]["content"]["parts"][0]["text"]
-        txt = txt.replace("\r\n", "\n").replace("\r", "\n")
-        txt = re.sub(r"\n{3,}", "\n\n", txt).strip()
-        if len(txt) < 900:
-            return None
-        return txt
-    except Exception:
-        return None
-
-
 def _to_telegram_html(text: str) -> str:
-    # Convert markdown-like **bold** to Telegram HTML <b>..</b> and escape everything else.
     src = text or ""
     out: list[str] = []
     pos = 0
@@ -115,50 +48,70 @@ def _to_telegram_html(text: str) -> str:
     return "".join(out)
 
 
+def _generate_ru_post(api_key: str, model: str, *, title: str, description: str, body: str) -> str:
+    prompt = (
+        "Ты редактор Telegram-канала про маркетинг, UGC и AI. "
+        "Напиши пост на русском языке по материалу статьи. "
+        "Сохрани суть, факты и практические шаги из источника. "
+        "Не используй шаблонные пустые фразы. "
+        "Структура: хук, почему это важно, ключевые тезисы (буллеты), практические шаги (буллеты), вывод+CTA, хэштеги. "
+        "Длина 1200-3500 символов. "
+        "Используй переносы строк и читабельные абзацы. "
+        "Если по контексту нужен SaaS для UGC/автоматизации, упоминай My UGC Studio. "
+        "Верни только готовый текст поста, без объяснений."
+    )
+
+    user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\n"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+
+    last_err = None
+    for _ in range(3):
+        payload: dict[str, Any] = {
+            "contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + user}]}],
+            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 1800},
+        }
+        try:
+            r = requests.post(url, json=payload, timeout=60)
+            if r.status_code >= 400:
+                last_err = RuntimeError(f"Gemini telegram generate failed: {r.status_code} {r.text}")
+                continue
+            data = r.json()
+            text = data["candidates"][0]["content"]["parts"][0]["text"]
+            text = text.replace("\r\n", "\n").replace("\r", "\n")
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+            if not text:
+                last_err = RuntimeError("Gemini returned empty telegram post")
+                continue
+            return text
+        except Exception as e:
+            last_err = e
+            continue
+
+    raise RuntimeError(str(last_err) if last_err else "Gemini telegram generation failed")
+
+
 def build_telegram_post_ru(*, title: str, description: str, content_html: str, url: str, include_link: bool = True) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+    if not api_key:
+        raise RuntimeError("Missing GEMINI_API_KEY/GOOGLE_API_KEY for Telegram generation")
+
     body = _strip_html_to_text(content_html)
     body = _truncate(body, 7000)
 
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
-    model = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-
-    draft = None
-    if api_key:
-        draft = _generate_ru_post(api_key, model, title=title, description=description, body=body)
-
-    if not draft:
-        draft = (
-            f"{title}\n\n"
-            "Почему это важно: рынок переполнен шаблонным контентом, и конверсию получает тот, кто дает полезную структуру и быстрые шаги внедрения.\n\n"
-            "Что взять в работу сегодня:\n"
-            "- Сформулируйте 1 сильный хук под аудиторию.\n"
-            "- Подготовьте 3-5 конкретных тезисов с цифрами/фактами.\n"
-            "- Добавьте блок практических шагов, чтобы пост был применимым.\n"
-            "- Проверьте читаемость: короткие абзацы и буллеты.\n"
-            "- Закройте пост понятным CTA.\n\n"
-            "Суть статьи в одном блоке:\n"
-            f"{_truncate(body, 2200)}\n\n"
-            "Вывод: системный и полезный контент выигрывает у случайных публикаций и дает стабильный рост.\n\n"
-            "#маркетинг #ugc #ai #контент #автоматизация"
-        )
-
-    # Hard-enforce RU pass to avoid mixed EN/RU output.
-    if api_key:
-        draft = _force_russian(api_key, model, draft)
-
+    draft = _generate_ru_post(api_key, model, title=title, description=description, body=body)
     out = _truncate(draft, 3900)
     if include_link and url:
         out = _truncate(out, 3800) + "\n\n" + url
     return out
 
 
-def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: str | None = None) -> dict[str, Any]:
+def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: str | None = None, hero_public_url: str | None = None) -> dict[str, Any]:
     base = f"https://api.telegram.org/bot{bot_token}"
 
     full_text = _truncate((text or "").strip(), 3900)
     html_text = _to_telegram_html(full_text)
 
-    # Caption is limited to 1024, so use photo+caption only for short posts.
     if photo_abs_path and len(full_text) <= 1000:
         try:
             with open(photo_abs_path, "rb") as f:
@@ -175,6 +128,10 @@ def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: st
             return {"photo": sent_photo, "message": sent_photo, "mode": "photo_caption", "sent_text": full_text}
         except Exception:
             pass
+
+    if hero_public_url:
+        hidden = f'<a href="{html.escape(hero_public_url)}">&#8205;</a>\n'
+        html_text = hidden + html_text
 
     rm = requests.post(
         base + "/sendMessage",

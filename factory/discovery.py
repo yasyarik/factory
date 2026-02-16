@@ -378,12 +378,10 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
 
         # Keep ideas relevant to the requested direction.
         if dir_tokens:
-            required_matches = 2 if len(dir_tokens) >= 3 else 1
+            required_matches = 1
             if match_count < required_matches:
                 continue
-            if anchor_tokens and not (anchor_tokens & topic_tokens):
-                continue
-            if fit < 0.20:
+            if fit < 0.08:
                 continue
 
         score = (0.35 * recency) + (0.30 * eng_norm) + (0.20 * cross) + (0.15 * fit)
@@ -427,7 +425,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
             if dir_tokens:
                 match2 = len(dir_tokens & tt)
                 fit2 = match2 / max(1, len(dir_tokens))
-            required2 = 2 if len(dir_tokens) >= 3 else 1
+            required2 = 1
             has_anchor = (not anchor_tokens) or bool(anchor_tokens & tt)
             if match2 >= required2 and has_anchor and fit2 >= 0.12 and not any(x.get("topic") == topic for x in items):
                 fallback.append(
@@ -456,6 +454,44 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
         seen_topics.add(k)
         dedup.append(it)
     items = dedup
+
+    # If external signals are sparse, synthesize safe topic variants from direction.
+    if len(items) < cap:
+        base = _normalize_topic_case(_to_topic_phrase(direction))
+        variants = [
+            f"{base}: best tools in 2026",
+            f"How to run a {base} with AI in 2026?",
+            f"{base} pricing: what to charge in 2026?",
+            f"{base} for ecommerce brands: step-by-step guide",
+            f"{base} prompts that improve image quality",
+            f"{base} workflow for Shopify product pages",
+            f"{base} mistakes to avoid in 2026",
+            f"{base} vs studio shoot: ROI comparison",
+            f"{base} checklist before publishing ads",
+            f"Can AI {base} increase conversion rates?",
+            f"{base} content plan for 30 days",
+            f"{base} case study: before vs after results",
+        ]
+        for v in variants:
+            t = _clean_candidate_topic(v, direction)
+            if not t:
+                continue
+            k = _key(t)
+            if not k or any(_key(x.get("topic") or "") == k for x in items):
+                continue
+            items.append(
+                {
+                    "topic": t,
+                    "intent": _infer_intent(t),
+                    "score": 35.0,
+                    "whyNow": "synthetic fallback from direction seed",
+                    "category": (category_hint or "Strategy").strip() or "Strategy",
+                    "sourceCount": 0,
+                    "sources": [],
+                }
+            )
+            if len(items) >= cap:
+                break
 
     seen_sources = []
     seen_keys = set()
