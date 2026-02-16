@@ -124,8 +124,8 @@
           <input id="category" style="width: 200px" placeholder="Category (optional)" />
           <input id="hero" style="width: 260px" placeholder="Hero image (optional, e.g. scaling-ai.jpg)" />
           <select id="visibility" style="width: 170px">
-            <option value="hidden" selected>Hidden</option>
-            <option value="public">Public</option>
+            <option value="public" selected>Public</option>
+            <option value="hidden">Hidden</option>
           </select>
           <button class="primary" id="createBtn">Create</button>
           <button id="refreshBtn">Refresh</button>
@@ -179,6 +179,18 @@
           <button class="warn" id="liDisconnectBtn">Disconnect</button>
         </div>
         <div class="muted" style="margin-top: 10px;">Posts use the article hero image and an auto-generated summary under 3000 characters.</div>
+      </div>
+
+      <div class="panel" id="tgPanel">
+        <div class="row" style="justify-content: space-between;">
+          <div style="font-weight: 950; letter-spacing: -0.01em;">Telegram + X (Twitter)</div>
+          <div class="muted">Telegram posts are auto-adapted to RU. X publishes as a thread (carousel-like sequence).</div>
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <input id="tgChatId" style="width: 260px" placeholder="Telegram chat id (optional override, e.g. @mychannel)" />
+          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="tgIncludeLink" checked />Include link</label>
+          <span class="muted">X uses env token and posts thread automatically.</span>
+        </div>
       </div>
 
             <div class="panel">
@@ -360,6 +372,42 @@
           }
         } catch (e) {
           alert('LinkedIn publish failed');
+        }
+      }
+
+      async function telegramPublish(jobId) {
+        var includeLink = !!(el('tgIncludeLink') && el('tgIncludeLink').checked);
+        var chatId = (el('tgChatId') && el('tgChatId').value) ? el('tgChatId').value.trim() : '';
+        try {
+          var out = await api('/api/jobs/' + encodeURIComponent(jobId) + '/telegram/publish', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ includeLink: includeLink, chatId: chatId || undefined })
+          });
+          if (out && out.success) {
+            schedulePoll();
+          } else {
+            alert((out && out.error) ? out.error : 'Telegram publish failed');
+          }
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
+      async function twitterPublish(jobId) {
+        try {
+          var out = await api('/api/jobs/' + encodeURIComponent(jobId) + '/twitter/publish', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+          });
+          if (out && out.success) {
+            schedulePoll();
+          } else {
+            alert((out && out.error) ? out.error : 'X/Twitter publish failed');
+          }
+        } catch (e) {
+          alert(String((e && e.message) || e));
         }
       }
 
@@ -545,7 +593,9 @@
               ? '<div class="muted" style="margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(j.description) + '</div>'
               : '')
             + '<div class="muted" style="margin-top:6px;">visibility: <span class="mono">' + escapeHtml(visibility) + '</span></div>'
-            + (j.linkedinStatus ? ('<div class="muted" style="margin-top:6px;">linkedin: <span class="mono">' + escapeHtml(j.linkedinStatus) + '</span>' + (j.linkedinError ? (' <span class="err">' + escapeHtml(j.linkedinError) + '</span>') : '') + '</div>') : '');
+            + (j.linkedinStatus ? ('<div class="muted" style="margin-top:6px;">linkedin: <span class="mono">' + escapeHtml(j.linkedinStatus) + '</span>' + (j.linkedinError ? (' <span class="err">' + escapeHtml(j.linkedinError) + '</span>') : '') + '</div>') : '')
+            + (j.telegramStatus ? ('<div class="muted" style="margin-top:6px;">telegram: <span class="mono">' + escapeHtml(j.telegramStatus) + '</span>' + (j.telegramError ? (' <span class="err">' + escapeHtml(j.telegramError) + '</span>') : '') + '</div>') : '')
+            + (j.twitterStatus ? ('<div class="muted" style="margin-top:6px;">x: <span class="mono">' + escapeHtml(j.twitterStatus) + '</span>' + (j.twitterError ? (' <span class="err">' + escapeHtml(j.twitterError) + '</span>') : '') + '</div>') : '');
 
           var previewUrl = resolveUrl('/preview/' + j.id);
           var published = j.publishedUrl ? '<a href="' + j.publishedUrl + '" target="_blank" rel="noreferrer">live</a>' : '';
@@ -562,6 +612,18 @@
           var isPosted = (liStatus === 'POSTED');
           var liLabel = isPosting ? 'Posting...' : (isPosted ? 'Posted' : 'LinkedIn');
           var liClass = isPosted ? 'linkedin-posted' : '';
+
+          var tgStatus = (j.telegramStatus || '').toUpperCase();
+          var tgPosting = (tgStatus === 'POSTING');
+          var tgPosted = (tgStatus === 'POSTED');
+          var canTelegram = (!isGenerating) && (!tgPosting) && (status === 'READY' || status === 'PUBLISHED');
+          var tgLabel = tgPosting ? 'Posting...' : (tgPosted ? 'Telegramed' : 'Telegram');
+
+          var twStatus = (j.twitterStatus || '').toUpperCase();
+          var twPosting = (twStatus === 'POSTING');
+          var twPosted = (twStatus === 'POSTED');
+          var canTwitter = (!isGenerating) && (!twPosting) && (status === 'READY' || status === 'PUBLISHED');
+          var twLabel = twPosting ? 'Posting...' : (twPosted ? 'X Posted' : 'X Thread');
 
           var err = j.error ? '<div class="err" style="margin-top:6px;">' + escapeHtml(j.error) + '</div>' : '';
 
@@ -592,7 +654,7 @@
         }).join('');
       
         var hasGenerating = jobs.some(function(x){ return (x && x.status) === 'GENERATING'; });
-        var hasPosting = jobs.some(function(x){ return (x && String(x.linkedinStatus||'').toUpperCase()) === 'POSTING'; });
+        var hasPosting = jobs.some(function(x){ return ((x && String(x.linkedinStatus||'').toUpperCase()) === 'POSTING') || ((x && String(x.telegramStatus||'').toUpperCase()) === 'POSTING') || ((x && String(x.twitterStatus||'').toUpperCase()) === 'POSTING'); });
         if (hasGenerating || hasPosting) schedulePoll();
       }
 

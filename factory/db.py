@@ -24,7 +24,7 @@ def db_init(path: str) -> None:
               faq_json TEXT,
               error TEXT,
               sources_json TEXT,
-              visibility TEXT NOT NULL DEFAULT 'hidden',
+              visibility TEXT NOT NULL DEFAULT 'public',
               published_url TEXT,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
@@ -40,7 +40,7 @@ def db_init(path: str) -> None:
         if "sources_json" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN sources_json TEXT;")
         if "visibility" not in cols:
-            conn.execute("ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'hidden';")
+            conn.execute("ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public';")
 
         if 'linkedin_status' not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_status TEXT;")
@@ -50,6 +50,24 @@ def db_init(path: str) -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_posted_at TEXT;")
         if 'linkedin_error' not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_error TEXT;")
+
+        if 'telegram_status' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN telegram_status TEXT;")
+        if 'telegram_post_url' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN telegram_post_url TEXT;")
+        if 'telegram_posted_at' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN telegram_posted_at TEXT;")
+        if 'telegram_error' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN telegram_error TEXT;")
+
+        if 'twitter_status' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN twitter_status TEXT;")
+        if 'twitter_post_url' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN twitter_post_url TEXT;")
+        if 'twitter_posted_at' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN twitter_posted_at TEXT;")
+        if 'twitter_error' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN twitter_error TEXT;")
 
         conn.execute(
             """

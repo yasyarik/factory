@@ -40,6 +40,15 @@ from factory.linkedin import (
     db_consume_state,
     post_job_to_linkedin,
 )
+from factory.telegram import (
+    build_telegram_post_ru,
+    telegram_send,
+    telegram_message_url,
+)
+from factory.twitter import (
+    build_twitter_thread_ru,
+    twitter_post_thread,
+)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
@@ -120,7 +129,9 @@ def list_jobs():
             """
             SELECT id, topic, slug, status, title, description, category, hero_image,
                    draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url,
-                   linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error
+                   linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error,
+                   telegram_status, telegram_post_url, telegram_posted_at, telegram_error,
+                   twitter_status, twitter_post_url, twitter_posted_at, twitter_error
             FROM jobs
             ORDER BY created_at DESC
             LIMIT 500
@@ -157,6 +168,14 @@ def list_jobs():
                 "linkedinPostUrl": r[17],
                 "linkedinPostedAt": r[18],
                 "linkedinError": r[19],
+                "telegramStatus": r[20],
+                "telegramPostUrl": r[21],
+                "telegramPostedAt": r[22],
+                "telegramError": r[23],
+                "twitterStatus": r[24],
+                "twitterPostUrl": r[25],
+                "twitterPostedAt": r[26],
+                "twitterError": r[27],
             }
         )
 
@@ -173,7 +192,7 @@ async def create_job(request: Request):
     # Optional overrides
     category = (body.get("category") or "").strip() or None
     hero_image = (body.get("heroImage") or "").strip() or None
-    visibility = (body.get("visibility") or "hidden").strip().lower()
+    visibility = (body.get("visibility") or "public").strip().lower()
     if visibility not in ("public", "hidden"):
         raise HTTPException(status_code=400, detail="visibility must be public|hidden")
 
@@ -643,7 +662,9 @@ def get_job(job_id: str):
             """
             SELECT id, topic, slug, status, title, description, category, hero_image,
                    draft_html, faq_json, error, sources_json, visibility, created_at, updated_at, published_url,
-                   linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error
+                   linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error,
+                   telegram_status, telegram_post_url, telegram_posted_at, telegram_error,
+                   twitter_status, twitter_post_url, twitter_posted_at, twitter_error
             FROM jobs
             WHERE id=?
             """,
@@ -677,6 +698,18 @@ def get_job(job_id: str):
             "createdAt": r[13],
             "updatedAt": r[14],
             "publishedUrl": r[15],
+            "linkedinStatus": r[16],
+            "linkedinPostUrl": r[17],
+            "linkedinPostedAt": r[18],
+            "linkedinError": r[19],
+            "telegramStatus": r[20],
+            "telegramPostUrl": r[21],
+            "telegramPostedAt": r[22],
+            "telegramError": r[23],
+            "twitterStatus": r[24],
+            "twitterPostUrl": r[25],
+            "twitterPostedAt": r[26],
+            "twitterError": r[27],
         },
     }
 
@@ -1037,4 +1070,151 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
 
     threading.Thread(target=_worker, daemon=True).start()
 
+    return {"success": True, "status": "POSTING"}
+
+
+@app.post("/api/jobs/{job_id}/telegram/publish")
+def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
+    payload = payload or {}
+
+    bot_token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+    chat_id = (payload.get("chatId") or os.environ.get("TELEGRAM_CHAT_ID") or "").strip()
+    if not bot_token or not chat_id:
+        raise HTTPException(status_code=500, detail="Missing TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID")
+
+    include_link = bool(payload.get("includeLink", True))
+
+    with db_connect(DB_PATH) as conn:
+        job = conn.execute(
+            "SELECT topic, slug, title, description, hero_image, draft_html, status, published_url, telegram_status FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    topic, slug, title, description, hero_image, draft_html, status, published_url, tg_status = job
+
+    if tg_status == "POSTING":
+        return {"success": True, "status": "POSTING"}
+
+    if not slug:
+        raise HTTPException(status_code=400, detail="Missing slug")
+
+    url = (published_url or f"https://myugc.studio/blog/{slug}.html").strip()
+    hero_filename = os.path.basename(hero_image or "")
+    hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename else ""
+    if not hero_filename or not os.path.exists(hero_abs):
+        hero_abs = None
+
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE jobs SET telegram_status='POSTING', telegram_error=NULL, updated_at=? WHERE id=?",
+            (utcnow_iso(), job_id),
+        )
+    log_event(DB_PATH, job_id, "INFO", "Telegram posting started")
+
+    import threading
+
+    def _worker():
+        try:
+            text = build_telegram_post_ru(
+                title=title or topic,
+                description=description or "",
+                content_html=draft_html or "",
+                url=url,
+                include_link=include_link,
+            )
+            res = telegram_send(
+                bot_token=bot_token,
+                chat_id=chat_id,
+                text=text,
+                photo_abs_path=hero_abs,
+            )
+            message_id = (((res.get("message") or {}).get("result") or {}).get("message_id"))
+            post_url = telegram_message_url(chat_id, message_id)
+
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET telegram_status='POSTED', telegram_post_url=?, telegram_posted_at=?, telegram_error=NULL, updated_at=? WHERE id=?",
+                    (post_url, utcnow_iso(), utcnow_iso(), job_id),
+                )
+            log_event(DB_PATH, job_id, "READY", "Posted to Telegram")
+        except Exception as e:
+            msg = f"Telegram publish failed: {e}"
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET telegram_status='ERROR', telegram_error=?, updated_at=? WHERE id=?",
+                    (msg, utcnow_iso(), job_id),
+                )
+            log_event(DB_PATH, job_id, "ERROR", msg)
+
+    threading.Thread(target=_worker, daemon=True).start()
+    return {"success": True, "status": "POSTING"}
+
+
+@app.post("/api/jobs/{job_id}/twitter/publish")
+def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
+    payload = payload or {}
+
+    access_token = (os.environ.get("TWITTER_BEARER_TOKEN") or os.environ.get("X_BEARER_TOKEN") or "").strip()
+    if not access_token:
+        raise HTTPException(status_code=500, detail="Missing TWITTER_BEARER_TOKEN (OAuth2 User token required)")
+
+    with db_connect(DB_PATH) as conn:
+        job = conn.execute(
+            "SELECT topic, slug, title, description, draft_html, status, published_url, twitter_status FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    topic, slug, title, description, draft_html, status, published_url, tw_status = job
+
+    if tw_status == "POSTING":
+        return {"success": True, "status": "POSTING"}
+
+    if not slug:
+        raise HTTPException(status_code=400, detail="Missing slug")
+
+    url = (published_url or f"https://myugc.studio/blog/{slug}.html").strip()
+
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            "UPDATE jobs SET twitter_status='POSTING', twitter_error=NULL, updated_at=? WHERE id=?",
+            (utcnow_iso(), job_id),
+        )
+    log_event(DB_PATH, job_id, "INFO", "X/Twitter thread posting started")
+
+    import threading
+
+    def _worker():
+        try:
+            tweets = build_twitter_thread_ru(
+                title=title or topic,
+                description=description or "",
+                content_html=draft_html or "",
+                url=url,
+                max_posts=6,
+            )
+            out = twitter_post_thread(access_token=access_token, tweets=tweets)
+            post_url = out.get("thread_url")
+
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET twitter_status='POSTED', twitter_post_url=?, twitter_posted_at=?, twitter_error=NULL, updated_at=? WHERE id=?",
+                    (post_url, utcnow_iso(), utcnow_iso(), job_id),
+                )
+            log_event(DB_PATH, job_id, "READY", "Posted X/Twitter thread")
+        except Exception as e:
+            msg = f"X/Twitter publish failed: {e}"
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET twitter_status='ERROR', twitter_error=?, updated_at=? WHERE id=?",
+                    (msg, utcnow_iso(), job_id),
+                )
+            log_event(DB_PATH, job_id, "ERROR", msg)
+
+    threading.Thread(target=_worker, daemon=True).start()
     return {"success": True, "status": "POSTING"}
