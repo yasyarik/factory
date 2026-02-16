@@ -642,10 +642,21 @@
       }
 
       async function publishJob(id) {
-        if (!confirm('Publish to /var/www/landing/blog + commit/push?')) return;
         try {
+          var gj = await api('/api/jobs/' + id);
+          var job = (gj && gj.job) ? gj.job : {};
+          var vis = (job.visibility || 'hidden');
+          var msg = 'Publish to /var/www/landing/blog + commit/push?';
+          if (vis === 'hidden') {
+            msg = 'Publish as HIDDEN?\n\nThe page will exist by direct URL, but it will NOT appear in blog index/sitemap and is not intended for public listing.\n\nContinue?';
+          }
+          if (!confirm(msg)) return;
+
           var data = await api('/api/jobs/' + id + '/publish', { method: 'POST' });
-          if (data && data.url) alert('Published: ' + data.url);
+          if (data && data.url) {
+            var extra = (vis === 'hidden') ? '\n\nNote: visibility is hidden.' : '';
+            alert('Published: ' + data.url + extra);
+          }
         } catch (e) {
           alert(String((e && e.message) || e));
         } finally {

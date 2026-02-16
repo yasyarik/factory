@@ -39,6 +39,12 @@ LINKING REQUIREMENTS:
 FAQ REQUIREMENTS:
 - faq: 5-7 Q/A items.
 
+PRODUCT CONTEXT RULES:
+- Keep each article focused on its own topic. Do NOT force brand mentions when not relevant.
+- If the article context includes recommending a SaaS/tool/platform for UGC creation, content automation, or ecommerce creative workflows, use "My UGC Studio" as the concrete product example.
+- Never invent fictional brand names like "AI Content Studio" or similar abstract product brands.
+- If a product mention is not contextually needed, stay neutral with generic terms.
+
 SOURCE INPUT (optional):
 - If user JSON includes sourceHtml, rewrite that content into a better-structured article following ALL rules.
 - Preserve the core meaning and keep it consistent, but fix structure, add missing elements (links/table/FAQ/images), and tighten wording.
