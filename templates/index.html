@@ -976,7 +976,7 @@
           var tgStatus = (j.telegramStatus || '').toUpperCase();
           var twStatus = (j.twitterStatus || '').toUpperCase();
           var anyPosting = (liStatus === 'POSTING' || tgStatus === 'POSTING' || twStatus === 'POSTING');
-          var socialDisabled = isGenerating || anyPosting || !(status === 'READY' || status === 'PUBLISHED');
+          var socialDisabled = isGenerating || !(status === 'READY' || status === 'PUBLISHED');
 
           var err = j.error ? '<div class="err" style="margin-top:6px;">' + escapeHtml(j.error) + '</div>' : '';
 
