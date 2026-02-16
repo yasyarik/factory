@@ -133,6 +133,36 @@
         <div class="muted" style="margin-top: 10px;">Tip: set `GEMINI_API_KEY` in the factory process env to enable AI generation. Without it, we generate a deterministic placeholder draft (for pipeline testing).</div>
       </div>
 
+      <div class="panel" id="discoverPanel">
+        <div class="row" style="justify-content: space-between;">
+          <div style="font-weight: 950; letter-spacing: -0.01em;">Topic Discovery</div>
+          <div class="muted" id="discoverMeta">Use EN direction, for example: "shopify ugc ads".</div>
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <input id="discoverDirection" style="flex: 1; min-width: 300px" placeholder="Direction (EN): Shopify UGC ads, TikTok creatives" />
+          <input id="discoverCategory" style="width: 210px" placeholder="Default category (optional)" />
+          <input id="discoverLimit" style="width: 120px" placeholder="Limit" value="15" />
+          <button class="primary" id="discoverBtn">Discover</button>
+        </div>
+        <div class="muted" style="margin-top: 10px;">Sources: Reddit + search suggestions. Click Add to queue to create draft jobs.</div>
+        <div style="margin-top: 12px; overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 35%;">Topic idea</th>
+                <th style="width: 14%;">Intent</th>
+                <th style="width: 10%;">Score</th>
+                <th style="width: 26%;">Sources</th>
+                <th style="width: 15%;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="discoverTbody">
+              <tr><td colspan="5" class="muted" style="padding: 12px;">No results yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <div class="panel" id="liPanel">
         <div class="row" style="justify-content: space-between;">
           <div style="font-weight: 950; letter-spacing: -0.01em;">LinkedIn</div>
@@ -341,6 +371,127 @@
           .replace(/>/g, '&gt;')
           .replace(/"/g, '&quot;')
           .replace(/'/g, '&#039;');
+      }
+
+      var _discoverItems = [];
+
+      function renderDiscover(items) {
+        var tbody = el('discoverTbody');
+        var arr = Array.isArray(items) ? items : [];
+        _discoverItems = arr;
+
+        if (!tbody) return;
+        if (!arr.length) {
+          tbody.innerHTML = '<tr><td colspan="5" class="muted" style="padding: 12px;">No ideas found for this direction. Try a broader query.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = arr.map(function(it, i) {
+          var score = (it && typeof it.score !== 'undefined') ? String(it.score) : '-';
+          var intent = (it && it.intent) ? it.intent : 'Informational';
+          var topic = (it && it.topic) ? it.topic : '';
+          var why = (it && it.whyNow) ? it.whyNow : '';
+          var src = Array.isArray(it && it.sources) ? it.sources : [];
+          var srcHtml = src.length ? src.map(function(s){
+            var u = (s && s.url) ? s.url : '#';
+            var t = (s && s.title) ? s.title : 'source';
+            return '<a href="' + escapeHtml(u) + '" target="_blank" rel="noreferrer">' + escapeHtml(t) + '</a>';
+          }).join(' · ') : '<span class="muted">-</span>';
+
+          return '<tr>'
+            + '<td><div style="font-weight:900;">' + escapeHtml(topic) + '</div>'
+            + (why ? ('<div class="muted" style="margin-top:6px;">' + escapeHtml(why) + '</div>') : '')
+            + '</td>'
+            + '<td>' + escapeHtml(intent) + '</td>'
+            + '<td class="mono">' + escapeHtml(score) + '</td>'
+            + '<td>' + srcHtml + '</td>'
+            + '<td><button class="primary" onclick="addDiscoveredTopic(' + i + ')">Add to queue</button></td>'
+            + '</tr>';
+        }).join('');
+      }
+
+      async function discoverTopics() {
+        var dirEl = el('discoverDirection');
+        var catEl = el('discoverCategory');
+        var limEl = el('discoverLimit');
+        var btn = el('discoverBtn');
+        var meta = el('discoverMeta');
+
+        var direction = ((dirEl && dirEl.value) ? dirEl.value : '').trim();
+        if (!direction) {
+          var fallbackTopic = ((el('topic') && el('topic').value) ? el('topic').value : '').trim();
+          if (fallbackTopic && dirEl) {
+            dirEl.value = fallbackTopic;
+            direction = fallbackTopic;
+          }
+        }
+
+        if (!direction) {
+          alert('Enter Direction (EN) first');
+          return;
+        }
+
+        var limit = parseInt((limEl && limEl.value) ? limEl.value : '15', 10);
+        if (!Number.isFinite(limit)) limit = 15;
+        if (limit < 5) limit = 5;
+        if (limit > 30) limit = 30;
+
+        if (btn) btn.disabled = true;
+        if (meta) meta.textContent = 'Searching sources...';
+
+        try {
+          var out = await api('/api/topics/discover', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              direction: direction,
+              categoryHint: ((catEl && catEl.value) ? catEl.value : '').trim() || undefined,
+              limit: limit,
+            })
+          });
+
+          renderDiscover((out && out.items) ? out.items : []);
+
+          var d = (out && out.diagnostics) ? out.diagnostics : {};
+          if (meta) {
+            meta.textContent = 'Found ' + String(d.uniqueCount || 0) + ' unique ideas from ' + String(d.rawCount || 0) + ' signals';
+          }
+        } catch (e) {
+          renderDiscover([]);
+          if (meta) meta.textContent = 'Discovery failed';
+          alert(String((e && e.message) || e));
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      }
+
+      async function addDiscoveredTopic(index) {
+        var it = (_discoverItems && _discoverItems[index]) ? _discoverItems[index] : null;
+        if (!it || !it.topic) {
+          alert('Topic not found');
+          return;
+        }
+
+        var visEl = el('visibility');
+        var visibility = ((visEl && visEl.value) ? visEl.value : 'hidden').trim();
+
+        var defaultCat = (el('discoverCategory') && el('discoverCategory').value) ? el('discoverCategory').value.trim() : '';
+        var category = (it.category || defaultCat || '').trim();
+
+        try {
+          await api('/api/jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              topic: it.topic,
+              category: category || undefined,
+              visibility: visibility,
+            })
+          });
+          await refresh();
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
       }
 
       var _postsLoaded = false;
@@ -600,6 +751,7 @@
 
 el('createBtn').addEventListener('click', createJob);
       el('importBtn').addEventListener('click', importPost);
+      if (el('discoverBtn')) el('discoverBtn').addEventListener('click', discoverTopics);
 
       if (el('liConnectBtn')) el('liConnectBtn').addEventListener('click', linkedinConnect);
       if (el('liDisconnectBtn')) el('liDisconnectBtn').addEventListener('click', linkedinDisconnect);

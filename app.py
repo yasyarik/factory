@@ -14,6 +14,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from factory.db import db_init, db_connect, log_event
+from factory.discovery import discover_topics
 from factory.landing import (
     list_existing_posts,
     render_post_html,
@@ -195,6 +196,29 @@ async def create_job(request: Request):
     return {"success": True, "id": job_id}
 
 
+
+
+@app.post("/api/topics/discover")
+async def api_topics_discover(request: Request):
+    body = await request.json()
+    direction = (body.get("direction") or body.get("topic") or "").strip()
+    if len(direction) < 3:
+        raise HTTPException(status_code=400, detail="Direction must be at least 3 characters")
+
+    category_hint = (body.get("categoryHint") or body.get("category") or "").strip() or None
+
+    try:
+        limit = int(body.get("limit") or 20)
+    except Exception:
+        limit = 20
+    limit = max(5, min(30, limit))
+
+    try:
+        data = discover_topics(direction=direction, limit=limit, category_hint=category_hint)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Topic discovery failed: {e}")
+
+    return {"success": True, **data}
 
 
 @app.get("/api/posts")
