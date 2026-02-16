@@ -14,7 +14,7 @@ def _strip_html_to_text(html: str) -> str:
     s = (html or "")
     s = re.sub(r"(?is)<script.*?</script>", " ", s)
     s = re.sub(r"(?is)<style.*?</style>", " ", s)
-    s = re.sub(r"(?is)<br\\s*/?>", "\n", s)
+    s = re.sub(r"(?is)<br\s*/?>", "\n", s)
     s = re.sub(r"(?is)</p>", "\n\n", s)
     s = re.sub(r"(?is)</h[23]>", "\n\n", s)
     s = re.sub(r"(?is)<li[^>]*>", "- ", s)
@@ -48,12 +48,14 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
             "Перепиши материал на РУССКОМ в формате поста Telegram, сохраняя факты и практическую пользу. "
             "Стиль: живой, экспертный, без воды. Без выдуманных фактов. "
             "Требования: "
-            "1) Короткий хук 1-2 строки. "
-            "2) 4-8 буллетов с ключевыми идеями. "
-            "3) Короткий вывод + CTA. "
-            "4) 2-5 релевантных хэштегов. "
-            "5) Четкие абзацы и читаемость. "
-            "6) Если контекст статьи требует упоминания SaaS-инструмента для UGC/автоматизации, используй бренд My UGC Studio (не выдуманные названия). "
+            "1) Хук 1-2 строки. "
+            "2) 8-12 буллетов с конкретикой и цифрами из источника. "
+            "3) Блок Практические шаги (3-5 пунктов). "
+            "4) Вывод + CTA. "
+            "5) 3-6 релевантных хэштегов. "
+            "6) Четкие абзацы, читаемая структура, без воды. "
+            "7) Минимум 700 символов. "
+            "8) Если контекст статьи требует упоминания SaaS-инструмента для UGC/автоматизации, используй бренд My UGC Studio (не выдуманные названия). "
             "Верни только готовый текст поста."
         )
 
@@ -77,19 +79,28 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
                 txt = re.sub(r"\n{3,}", "\n\n", txt).strip()
                 if txt:
                     out = _truncate(txt, 3900)
-                    if include_link and url:
-                        out = _truncate(out, 3800) + "\n\n" + url
-                    return out
+                    # Avoid low-value 1-2 line outputs.
+                    if len(out) >= 700:
+                        if include_link and url:
+                            out = _truncate(out, 3800) + "\n\n" + url
+                        return out
         except Exception:
             pass
 
     # fallback
     post = (
         f"{title}\n\n"
-        f"{description}\n\n"
-        "Коротко по делу:\n"
-        f"{_truncate(body, 2600)}\n\n"
-        "#маркетинг #ugc #ai #контент"
+        "Почему это важно: рынок переполнен шаблонным контентом, и конверсию получает тот, кто дает полезную структуру и быстрые шаги внедрения.\n\n"
+        "Что взять в работу сегодня:\n"
+        "- Сформулируйте 1 сильный хук под аудиторию.\n"
+        "- Подготовьте 3-5 конкретных тезисов с цифрами/фактами.\n"
+        "- Добавьте блок практических шагов, чтобы пост был применимым.\n"
+        "- Проверьте читаемость: короткие абзацы и буллеты.\n"
+        "- Закройте пост понятным CTA.\n\n"
+        "Суть статьи в одном блоке:\n"
+        f"{_truncate(body, 2200)}\n\n"
+        "Вывод: системный и полезный контент выигрывает у случайных публикаций и дает стабильный рост.\n\n"
+        "#маркетинг #ugc #ai #контент #автоматизация"
     )
     post = _truncate(post, 3900)
     if include_link and url:
@@ -99,26 +110,36 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
 
 def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: str | None = None) -> dict[str, Any]:
     base = f"https://api.telegram.org/bot{bot_token}"
-    sent_photo = None
+
+    # Telegram caption limit for media posts is 1024 chars.
+    caption = _truncate((text or "").strip(), 1000)
 
     if photo_abs_path:
         try:
             with open(photo_abs_path, "rb") as f:
                 files = {"photo": f}
-                data = {"chat_id": chat_id}
+                data = {
+                    "chat_id": chat_id,
+                    "caption": caption,
+                }
                 rp = requests.post(base + "/sendPhoto", data=data, files=files, timeout=90)
             if rp.status_code >= 400:
                 raise RuntimeError(f"sendPhoto failed: {rp.status_code} {rp.text}")
             sent_photo = rp.json()
+            return {"photo": sent_photo, "message": sent_photo}
         except Exception:
-            sent_photo = None
+            # Fallback to text-only post if photo fails.
+            pass
 
-    rm = requests.post(base + "/sendMessage", data={"chat_id": chat_id, "text": text, "disable_web_page_preview": False}, timeout=60)
+    rm = requests.post(
+        base + "/sendMessage",
+        data={"chat_id": chat_id, "text": _truncate((text or "").strip(), 3900), "disable_web_page_preview": False},
+        timeout=60,
+    )
     if rm.status_code >= 400:
         raise RuntimeError(f"sendMessage failed: {rm.status_code} {rm.text}")
     msg = rm.json()
-
-    return {"photo": sent_photo, "message": msg}
+    return {"photo": None, "message": msg}
 
 
 def telegram_message_url(chat_id: str, message_id: int | None) -> str | None:
