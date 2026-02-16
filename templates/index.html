@@ -351,12 +351,38 @@
           </div>
 
           <div class="panel">
-            <h3>One-time Integrations</h3>
-            <div class="kv" style="margin-top: 10px;">
-              <div class="muted">LinkedIn</div><div>Configure app scopes + connect in Publishing tab.</div>
-              <div class="muted">Telegram</div><div>Set <span class="mono">TELEGRAM_BOT_TOKEN</span> and <span class="mono">TELEGRAM_CHAT_ID</span> in env.</div>
-              <div class="muted">X/Twitter</div><div>Set <span class="mono">TWITTER_BEARER_TOKEN</span> (OAuth user token).</div>
-              <div class="muted">Gemini</div><div>Set <span class="mono">GEMINI_API_KEY</span> in factory process env.</div>
+            <h3>Social Environment</h3>
+            <div class="muted" style="margin-top:8px;">Manage keys and callbacks directly from UI. Secret fields keep current value if left empty.</div>
+            <div class="stack" style="margin-top:10px; gap:10px;">
+              <div class="row">
+                <input id="setLiClientId" style="flex:1; min-width:230px" placeholder="LINKEDIN_CLIENT_ID" />
+                <input id="setLiClientSecret" style="flex:1; min-width:230px" placeholder="LINKEDIN_CLIENT_SECRET (leave empty to keep)" />
+              </div>
+              <div class="row">
+                <input id="setLiRedirect" style="flex:1; min-width:300px" placeholder="LINKEDIN_REDIRECT_URI" />
+                <input id="setLiPersonUrn" style="flex:1; min-width:260px" placeholder="LINKEDIN_PERSON_URN" />
+              </div>
+              <div class="row">
+                <input id="setLiOrgUrn" style="flex:1; min-width:260px" placeholder="LINKEDIN_ORG_URN" />
+                <input id="setLiAuthorBio" style="flex:1; min-width:260px" placeholder="LINKEDIN_AUTHOR_BIO" />
+              </div>
+              <div class="row">
+                <input id="setTgToken" style="flex:1; min-width:240px" placeholder="TELEGRAM_BOT_TOKEN (leave empty to keep)" />
+                <input id="setTgChatId" style="flex:1; min-width:240px" placeholder="TELEGRAM_CHAT_ID" />
+              </div>
+              <div class="row">
+                <input id="setTwToken" style="flex:1; min-width:260px" placeholder="TWITTER_BEARER_TOKEN (leave empty to keep)" />
+              </div>
+              <div class="row" style="margin-top:4px;">
+                <label class="pill"><input type="checkbox" id="clrLiClientSecret" /> clear LI secret</label>
+                <label class="pill"><input type="checkbox" id="clrTgToken" /> clear TG token</label>
+                <label class="pill"><input type="checkbox" id="clrTwToken" /> clear X token</label>
+              </div>
+              <div class="row" style="margin-top:4px;">
+                <button class="primary" id="socialLoadBtn">Load current</button>
+                <button class="primary" id="socialSaveBtn">Save social settings</button>
+                <span class="muted" id="socialStatus">-</span>
+              </div>
             </div>
           </div>
         </div>
@@ -487,6 +513,77 @@
         var v = (el('defaultVisibility') && el('defaultVisibility').value) ? el('defaultVisibility').value : 'public';
         try { localStorage.setItem('factory.defaultVisibility', v); } catch (e) {}
         alert('Defaults saved');
+      }
+
+      function _setSocialStatus(msg) {
+        if (el('socialStatus')) el('socialStatus').textContent = msg || '-';
+      }
+
+      async function loadSocialSettings() {
+        try {
+          var out = await api('/api/settings/social');
+          var v = (out && out.values) ? out.values : {};
+          var m = (out && out.masked) ? out.masked : {};
+
+          if (el('setLiClientId')) el('setLiClientId').value = v.LINKEDIN_CLIENT_ID || '';
+          if (el('setLiRedirect')) el('setLiRedirect').value = v.LINKEDIN_REDIRECT_URI || '';
+          if (el('setLiPersonUrn')) el('setLiPersonUrn').value = v.LINKEDIN_PERSON_URN || '';
+          if (el('setLiOrgUrn')) el('setLiOrgUrn').value = v.LINKEDIN_ORG_URN || '';
+          if (el('setLiAuthorBio')) el('setLiAuthorBio').value = v.LINKEDIN_AUTHOR_BIO || '';
+          if (el('setTgChatId')) el('setTgChatId').value = v.TELEGRAM_CHAT_ID || '';
+
+          if (el('setLiClientSecret')) el('setLiClientSecret').placeholder = (m.LINKEDIN_CLIENT_SECRET && m.LINKEDIN_CLIENT_SECRET.hasValue) ? ('saved: ' + m.LINKEDIN_CLIENT_SECRET.value) : 'LINKEDIN_CLIENT_SECRET (empty)';
+          if (el('setTgToken')) el('setTgToken').placeholder = (m.TELEGRAM_BOT_TOKEN && m.TELEGRAM_BOT_TOKEN.hasValue) ? ('saved: ' + m.TELEGRAM_BOT_TOKEN.value) : 'TELEGRAM_BOT_TOKEN (empty)';
+          if (el('setTwToken')) el('setTwToken').placeholder = (m.TWITTER_BEARER_TOKEN && m.TWITTER_BEARER_TOKEN.hasValue) ? ('saved: ' + m.TWITTER_BEARER_TOKEN.value) : 'TWITTER_BEARER_TOKEN (empty)';
+
+          _setSocialStatus('loaded');
+        } catch (e) {
+          _setSocialStatus('load failed');
+          alert(String((e && e.message) || e));
+        }
+      }
+
+      async function saveSocialSettings() {
+        var values = {
+          LINKEDIN_CLIENT_ID: (el('setLiClientId') && el('setLiClientId').value || '').trim(),
+          LINKEDIN_CLIENT_SECRET: (el('setLiClientSecret') && el('setLiClientSecret').value || '').trim(),
+          LINKEDIN_REDIRECT_URI: (el('setLiRedirect') && el('setLiRedirect').value || '').trim(),
+          LINKEDIN_PERSON_URN: (el('setLiPersonUrn') && el('setLiPersonUrn').value || '').trim(),
+          LINKEDIN_ORG_URN: (el('setLiOrgUrn') && el('setLiOrgUrn').value || '').trim(),
+          LINKEDIN_AUTHOR_BIO: (el('setLiAuthorBio') && el('setLiAuthorBio').value || '').trim(),
+          TELEGRAM_BOT_TOKEN: (el('setTgToken') && el('setTgToken').value || '').trim(),
+          TELEGRAM_CHAT_ID: (el('setTgChatId') && el('setTgChatId').value || '').trim(),
+          TWITTER_BEARER_TOKEN: (el('setTwToken') && el('setTwToken').value || '').trim(),
+        };
+
+        var clear = [];
+        if (el('clrLiClientSecret') && el('clrLiClientSecret').checked) clear.push('LINKEDIN_CLIENT_SECRET');
+        if (el('clrTgToken') && el('clrTgToken').checked) clear.push('TELEGRAM_BOT_TOKEN');
+        if (el('clrTwToken') && el('clrTwToken').checked) clear.push('TWITTER_BEARER_TOKEN');
+
+        try {
+          _setSocialStatus('saving...');
+          await api('/api/settings/social', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ values: values, clear: clear })
+          });
+
+          if (el('setLiClientSecret')) el('setLiClientSecret').value = '';
+          if (el('setTgToken')) el('setTgToken').value = '';
+          if (el('setTwToken')) el('setTwToken').value = '';
+          if (el('clrLiClientSecret')) el('clrLiClientSecret').checked = false;
+          if (el('clrTgToken')) el('clrTgToken').checked = false;
+          if (el('clrTwToken')) el('clrTwToken').checked = false;
+
+          await loadSocialSettings();
+          await loadLinkedInStatus();
+          _setSocialStatus('saved');
+          alert('Social settings saved and applied');
+        } catch (e) {
+          _setSocialStatus('save failed');
+          alert(String((e && e.message) || e));
+        }
       }
 
       function filteredJobs() {
@@ -1097,6 +1194,8 @@
       el('refreshBtn').addEventListener('click', function(){ loadPostSuggestions(); refresh().catch(function(err){ alert(String((err && err.message) || err)); }); });
       el('jobFilterStatus').addEventListener('change', renderJobs);
       el('saveDefaultsBtn').addEventListener('click', saveDefaults);
+      el('socialLoadBtn').addEventListener('click', loadSocialSettings);
+      el('socialSaveBtn').addEventListener('click', saveSocialSettings);
       el('closeModal').addEventListener('click', function() { el('modalBackdrop').style.display = 'none'; });
       el('modalBackdrop').addEventListener('click', function(e) { if (e.target === el('modalBackdrop')) el('modalBackdrop').style.display = 'none'; });
       el('closeEdit').addEventListener('click', function() { el('editBackdrop').style.display = 'none'; });
@@ -1108,6 +1207,7 @@
 
       applyDefaultsUi();
       loadLinkedInStatus();
+      loadSocialSettings();
       loadPostSuggestions();
       loadAutopublish();
       loadAutopublishRuns();

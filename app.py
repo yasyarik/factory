@@ -59,6 +59,7 @@ from factory.twitter import (
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
 DB_PATH = os.path.join(APP_DIR, "factory.sqlite")
+ENV_PATH = os.path.join(APP_DIR, ".env")
 
 LANDING_DIR = os.environ.get("LANDING_DIR", "/var/www/landing")
 BLOG_DIR = os.path.join(LANDING_DIR, "blog")
@@ -70,6 +71,25 @@ app = FastAPI()
 
 _AUTOPUBLISH_LOCK = threading.Lock()
 _AUTOPUBLISH_THREAD = None
+
+
+SOCIAL_ENV_KEYS = {
+    "LINKEDIN_CLIENT_ID",
+    "LINKEDIN_CLIENT_SECRET",
+    "LINKEDIN_REDIRECT_URI",
+    "LINKEDIN_PERSON_URN",
+    "LINKEDIN_ORG_URN",
+    "LINKEDIN_AUTHOR_BIO",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "TWITTER_BEARER_TOKEN",
+}
+
+SOCIAL_SECRET_KEYS = {
+    "LINKEDIN_CLIENT_SECRET",
+    "TELEGRAM_BOT_TOKEN",
+    "TWITTER_BEARER_TOKEN",
+}
 
 
 def utcnow_iso() -> str:
@@ -102,6 +122,108 @@ def _load_dotenv(dotenv_path: str) -> None:
         return
 
 # Keep AI rewrite source clean: the template already adds nav/share/cta blocks.
+def _env_decode_line(raw: str) -> tuple[str, str] | None:
+    line = (raw or "").strip()
+    if not line or line.startswith("#") or "=" not in line:
+        return None
+    k, v = line.split("=", 1)
+    k = k.strip()
+    v = v.strip()
+    if len(v) >= 2 and (v[0] == v[-1]) and (v[0] in ('"', "'")):
+        v = v[1:-1]
+    if not k:
+        return None
+    return k, v
+
+
+def _env_encode_value(v: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_./:@-]+", v or ""):
+        return v
+    return json.dumps(v or "")
+
+
+def _env_file_values(path: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for raw in f:
+                kv = _env_decode_line(raw)
+                if kv:
+                    out[kv[0]] = kv[1]
+    except Exception:
+        return out
+    return out
+
+
+def _env_write_updates(path: str, updates: dict[str, str], clears: set[str]) -> None:
+    lines: list[str] = []
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+    updates_left = dict(updates)
+    out_lines: list[str] = []
+
+    for raw in lines:
+        kv = _env_decode_line(raw)
+        if not kv:
+            out_lines.append(raw)
+            continue
+
+        key = kv[0]
+        if key in clears:
+            continue
+        if key in updates_left:
+            out_lines.append(f"{key}={_env_encode_value(updates_left.pop(key))}\n")
+            continue
+        out_lines.append(raw)
+
+    for key, value in updates_left.items():
+        out_lines.append(f"{key}={_env_encode_value(value)}\n")
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.writelines(out_lines)
+
+
+def _social_settings_snapshot() -> dict[str, Any]:
+    values = _env_file_values(ENV_PATH)
+
+    def pick(key: str, *fallbacks: str) -> str:
+        for k in (key, *fallbacks):
+            v = (values.get(k) or os.environ.get(k) or "").strip()
+            if v:
+                return v
+        return ""
+
+    out: dict[str, Any] = {}
+    out["LINKEDIN_CLIENT_ID"] = pick("LINKEDIN_CLIENT_ID", "LI_CLIENT_ID")
+    out["LINKEDIN_CLIENT_SECRET"] = pick("LINKEDIN_CLIENT_SECRET", "LI_CLIENT_SECRET")
+    out["LINKEDIN_REDIRECT_URI"] = pick("LINKEDIN_REDIRECT_URI") or "https://myugc.studio/factory/linkedin/callback"
+    out["LINKEDIN_PERSON_URN"] = pick("LINKEDIN_PERSON_URN", "LI_PERSON_URN")
+    out["LINKEDIN_ORG_URN"] = pick("LINKEDIN_ORG_URN")
+    out["LINKEDIN_AUTHOR_BIO"] = pick("LINKEDIN_AUTHOR_BIO", "LI_AUTHOR_BIO")
+    out["TELEGRAM_BOT_TOKEN"] = pick("TELEGRAM_BOT_TOKEN")
+    out["TELEGRAM_CHAT_ID"] = pick("TELEGRAM_CHAT_ID")
+    out["TWITTER_BEARER_TOKEN"] = pick("TWITTER_BEARER_TOKEN", "X_BEARER_TOKEN")
+
+    masked: dict[str, Any] = {}
+    for k in SOCIAL_ENV_KEYS:
+        v = (out.get(k) or "").strip()
+        if k in SOCIAL_SECRET_KEYS:
+            if not v:
+                masked[k] = {"value": "", "hasValue": False}
+            elif len(v) <= 8:
+                masked[k] = {"value": "*" * len(v), "hasValue": True}
+            else:
+                masked[k] = {"value": v[:4] + "..." + v[-2:], "hasValue": True}
+        else:
+            masked[k] = {"value": v, "hasValue": bool(v)}
+
+    return {"values": out, "masked": masked}
+
+
 def _sanitize_source_html(html: str | None) -> str | None:
     if not html:
         return None
@@ -1173,6 +1295,83 @@ def autopublish_runs(limit: int = 20):
         })
 
     return {"success": True, "runs": out}
+
+
+
+@app.get("/api/settings/social")
+def settings_social_get():
+    snap = _social_settings_snapshot()
+    return {
+        "success": True,
+        "values": snap.get("values") or {},
+        "masked": snap.get("masked") or {},
+    }
+
+
+@app.put("/api/settings/social")
+async def settings_social_put(request: Request):
+    body = await request.json()
+    values = body.get("values") or {}
+    clear = body.get("clear") or []
+
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="values must be object")
+    if not isinstance(clear, list):
+        raise HTTPException(status_code=400, detail="clear must be list")
+
+    updates: dict[str, str] = {}
+    clears: set[str] = set()
+
+    for k in clear:
+        key = str(k or "").strip()
+        if key in SOCIAL_ENV_KEYS:
+            clears.add(key)
+
+    for k, v in values.items():
+        key = str(k or "").strip()
+        if key not in SOCIAL_ENV_KEYS:
+            continue
+        val = str(v or "").strip()
+        if val:
+            updates[key] = val
+
+    # Aliases kept in sync for compatibility with older env naming.
+    if "LINKEDIN_CLIENT_ID" in updates:
+        updates["LI_CLIENT_ID"] = updates["LINKEDIN_CLIENT_ID"]
+    if "LINKEDIN_CLIENT_SECRET" in updates:
+        updates["LI_CLIENT_SECRET"] = updates["LINKEDIN_CLIENT_SECRET"]
+    if "LINKEDIN_PERSON_URN" in updates:
+        updates["LI_PERSON_URN"] = updates["LINKEDIN_PERSON_URN"]
+    if "LINKEDIN_AUTHOR_BIO" in updates:
+        updates["LI_AUTHOR_BIO"] = updates["LINKEDIN_AUTHOR_BIO"]
+
+    if "LINKEDIN_CLIENT_ID" in clears:
+        clears.add("LI_CLIENT_ID")
+    if "LINKEDIN_CLIENT_SECRET" in clears:
+        clears.add("LI_CLIENT_SECRET")
+    if "LINKEDIN_PERSON_URN" in clears:
+        clears.add("LI_PERSON_URN")
+    if "LINKEDIN_AUTHOR_BIO" in clears:
+        clears.add("LI_AUTHOR_BIO")
+    if "TWITTER_BEARER_TOKEN" in clears:
+        clears.add("X_BEARER_TOKEN")
+
+    _env_write_updates(ENV_PATH, updates, clears)
+
+    for k in clears:
+        os.environ.pop(k, None)
+    for k, v in updates.items():
+        os.environ[k] = v
+
+    snap = _social_settings_snapshot()
+    return {
+        "success": True,
+        "saved": sorted(list(updates.keys())),
+        "cleared": sorted(list(clears)),
+        "values": snap.get("values") or {},
+        "masked": snap.get("masked") or {},
+    }
+
 
 
 
