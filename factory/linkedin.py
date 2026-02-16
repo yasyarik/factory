@@ -226,7 +226,7 @@ def build_linkedin_post(
 ) -> str:
     """Create a LinkedIn post <= 3000 chars.
 
-    If include_link=False, we generate a full post within 3000 chars without a URL.
+    If include_link=False, generate a full self-contained post (no URL).
     """
 
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -235,9 +235,17 @@ def build_linkedin_post(
     body = _strip_html_to_text(content_html)
     body = _truncate_to(body, 2600)
 
-    MAX = 3000
-    suffix = ("\\n\\n" + url) if (include_link and url) else ""
-    target = MAX - len(suffix)
+    max_total = 3000
+    suffix = ("\n\n" + url) if (include_link and url) else ""
+    target = max_total - len(suffix)
+
+    # Enforce practical depth so LinkedIn posts are not tiny one-liners.
+    min_len = min(target - 120, max(900, int(target * 0.55)))
+
+    def _normalize_text(txt: str) -> str:
+        txt = (txt or "").strip()
+        txt = re.sub(r"\s+", " ", txt)
+        return txt
 
     if api_key:
         sys = (
@@ -245,57 +253,85 @@ def build_linkedin_post(
             "Write a LinkedIn post in FIRST PERSON as the author described below. "
             "Plain text only. No markdown. No emojis. "
             "Tone: confident, practical, specific. No hype. "
-            "Structure:\\n"
-            "- 1-2 line hook\\n"
-            "- 6-10 short bullets (1 line each)\\n"
-            "- 1 short paragraph with a clear conclusion\\n"
-            "- 3-6 hashtags\\n"
-            "Hard constraints:\\n"
-            f"- Max {target} characters for the post text (excluding an optional URL we may append).\\n"
-            "- Do NOT reference the words 'blog', 'article', or 'link' unless include_link=true.\\n"
+            "Structure:\n"
+            "- 1-2 line hook\n"
+            "- 6-10 short bullets (1 line each)\n"
+            "- 1 short paragraph with a clear conclusion\n"
+            "- 3-6 hashtags\n"
+            "Hard constraints:\n"
+            f"- Length must be between {min_len} and {target} characters.\n"
+            "- Do NOT reference the words 'blog', 'article', or 'link' unless include_link=true.\n"
+            "- Return only final post text."
         )
 
         user = (
-            f"AUTHOR BIO:\\n{author_bio}\\n\\n"
-            f"TITLE: {title}\\n"
-            f"META DESCRIPTION: {description}\\n\\n"
-            f"SOURCE (clean text excerpt):\\n{body}\\n\\n"
-            f"include_link={str(bool(include_link)).lower()}\\n"
+            f"AUTHOR BIO:\n{author_bio}\n\n"
+            f"TITLE: {title}\n"
+            f"META DESCRIPTION: {description}\n\n"
+            f"SOURCE (clean text excerpt):\n{body}\n\n"
+            f"include_link={str(bool(include_link)).lower()}\n"
             "Return ONLY the post text."
         )
 
         gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        payload = {
-            "contents": [{"role": "user", "parts": [{"text": sys + "\\n\\n" + user}]}],
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 900},
-        }
-        r = requests.post(gen_url, json=payload, timeout=60)
-        if r.status_code < 400:
+
+        def _call_llm(prompt_text: str) -> str:
+            payload = {
+                "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
+                "generationConfig": {"temperature": 0.65, "maxOutputTokens": 1200},
+            }
+            r = requests.post(gen_url, json=payload, timeout=60)
+            if r.status_code >= 400:
+                return ""
             data = r.json()
             try:
-                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                t = data["candidates"][0]["content"]["parts"][0]["text"]
             except Exception:
-                text = ""
-            text = (text or "").strip()
-            if text:
-                text = _truncate_to(text, target)
+                t = ""
+            return _normalize_text(t)
+
+        text = _call_llm(sys + "\n\n" + user)
+
+        # Retry once with explicit expansion instruction if too short.
+        if text and len(text) < min_len:
+            expand = (
+                f"Expand this LinkedIn post to between {min_len} and {target} characters. "
+                "Keep first-person voice and structure, add concrete details and examples, no fluff, plain text only.\n\n"
+                f"POST:\n{text}"
+            )
+            expanded = _call_llm(expand)
+            if expanded:
+                text = expanded
+
+        if text:
+            text = _truncate_to(text, target)
+            if len(text) >= min_len:
                 return text + suffix
 
-    hook = _truncate_to((title or "").strip(), 120)
-    base = _truncate_to((description or "").strip(), 220)
+    # Deterministic fallback with guaranteed depth.
+    clean_title = _truncate_to((title or "").strip(), 140)
+    clean_desc = _truncate_to((description or "").strip(), 260)
+
+    # Pull a few chunks from source so fallback is not generic.
+    chunks = [c.strip() for c in re.split(r"(?<=[.!?])\s+", body) if c.strip()]
+    snippets = chunks[:8]
+    insights = "\n".join([f"- { _truncate_to(x, 170) }" for x in snippets[:6]])
 
     post = (
-        f"{hook}\\n\\n"
-        f"{base}\\n\\n"
-        "Here is how I think about it:\\n"
-        "- What changed in 2026\\n"
-        "- What to measure\\n"
-        "- What to test\\n"
-        "- What to ship\\n"
-        "- What to stop doing\\n\\n"
-        "Conclusion: consistency beats novelty when the feedback loop is weekly.\\n\\n"
+        f"{clean_title}\n\n"
+        f"{clean_desc}\n\n"
+        "From my operator perspective, here is what actually matters:\n"
+        f"{insights}\n\n"
+        "Execution framework I use:\n"
+        "- Define one measurable goal per creative cycle\n"
+        "- Ship 3-5 variants weekly\n"
+        "- Keep winners, cut losers fast\n"
+        "- Scale only what has stable economics\n\n"
+        "My conclusion: teams win when the feedback loop is fast, measurable, and brutally practical.\n\n"
         "#marketing #ugc #tiktokads #growth #performance"
     )
+
+    post = _normalize_text(post)
     post = _truncate_to(post, target)
     return post + suffix
 
