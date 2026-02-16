@@ -413,6 +413,33 @@ def generate(job_id: str):
             )
         return JSONResponse(status_code=200, content={"success": False, "error": msg, "problems": problems})
 
+    # Generate hero + inline images immediately after successful draft generation
+    # so Preview already shows real media (not only after Publish).
+    try:
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        image_model = (
+            os.environ.get("GEMINI_IMAGE_MODEL")
+            or os.environ.get("GEMINI_MODEL_IMAGE")
+            or "gemini-2.5-flash-image"
+        )
+        hero_file, content_html, generated = ensure_hero_and_inline_images(
+            api_key=api_key,
+            image_model=image_model,
+            blog_dir=BLOG_DIR,
+            slug=draft.get("slug") or slug or _id,
+            topic=topic or draft.get("title") or "",
+            title=draft.get("title") or "",
+            category=draft.get("category") or category or "Strategy",
+            hero_image_hint=draft.get("heroImage") or hero_image,
+            content_html=draft.get("contentHtml") or "",
+        )
+        draft["heroImage"] = hero_file
+        draft["contentHtml"] = content_html
+        if generated:
+            log_event(DB_PATH, job_id, "INFO", f"Generated {len(generated)} image files for preview")
+    except Exception as e:
+        log_event(DB_PATH, job_id, "WARN", f"Image generation during generate failed: {e}")
+
     now = utcnow_iso()
     with db_connect(DB_PATH) as conn:
         conn.execute(
