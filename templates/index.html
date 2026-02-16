@@ -15,7 +15,6 @@
         --accent: rgba(139, 92, 246, 1);
         --good: rgba(34, 197, 94, 1);
         --warn: rgba(245, 158, 11, 1);
-        --bad: rgba(239, 68, 68, 1);
       }
       * { box-sizing: border-box; }
       body {
@@ -28,18 +27,21 @@
         color: var(--text);
         min-height: 100vh;
       }
-      .wrap { max-width: 1200px; margin: 0 auto; padding: 28px 18px 80px; }
+      .wrap { max-width: 1320px; margin: 0 auto; padding: 28px 18px 80px; }
       h1 { margin: 0; font-size: 36px; letter-spacing: -0.02em; font-weight: 950; }
       .sub { margin: 10px 0 0; color: var(--dim); line-height: 1.5; max-width: 920px; }
       .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      .stack { display: grid; gap: 14px; }
+      .grid-2 { display: grid; gap: 14px; grid-template-columns: 1fr 1fr; }
+      .grid-3 { display: grid; gap: 14px; grid-template-columns: repeat(3, 1fr); }
       .panel {
-        margin-top: 18px;
         border: 1px solid var(--border);
         background: var(--panel);
         border-radius: 18px;
         padding: 14px;
         box-shadow: 0 18px 60px rgba(0,0,0,0.35);
       }
+      .panel h3 { margin: 0; font-size: 18px; font-weight: 950; letter-spacing: -0.01em; }
       input, select {
         border: 1px solid rgba(255,255,255,0.18);
         background: rgba(255,255,255,0.04);
@@ -61,18 +63,9 @@
         font-size: 14px;
         cursor: pointer;
       }
-      button.primary {
-        border-color: rgba(139,92,246,0.55);
-        background: linear-gradient(135deg, rgba(139,92,246,0.45), rgba(124,58,237,0.2));
-      }
-      button.warn {
-        border-color: rgba(245,158,11,0.55);
-        background: linear-gradient(135deg, rgba(245,158,11,0.35), rgba(139,92,246,0.20));
-      }
-      button.good {
-        border-color: rgba(34,197,94,0.55);
-        background: linear-gradient(135deg, rgba(34,197,94,0.25), rgba(139,92,246,0.15));
-      }
+      button.primary { border-color: rgba(139,92,246,0.55); background: linear-gradient(135deg, rgba(139,92,246,0.45), rgba(124,58,237,0.2)); }
+      button.warn { border-color: rgba(245,158,11,0.55); background: linear-gradient(135deg, rgba(245,158,11,0.35), rgba(139,92,246,0.20)); }
+      button.good { border-color: rgba(34,197,94,0.55); background: linear-gradient(135deg, rgba(34,197,94,0.25), rgba(139,92,246,0.15)); }
       button.linkedin-posted {
         border-color: rgba(255,255,255,0.95);
         color: #ffffff;
@@ -80,8 +73,23 @@
         box-shadow: 0 0 0 1px rgba(255,255,255,0.35) inset;
       }
       button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .tabs { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+      .tab-btn { min-width: 120px; text-align: center; }
+      .tab-btn.active {
+        border-color: rgba(139,92,246,0.65);
+        background: linear-gradient(135deg, rgba(139,92,246,0.45), rgba(124,58,237,0.26));
+      }
+      .tab-pane { display: none; margin-top: 14px; }
+      .tab-pane.active { display: block; }
       table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-      th, td { padding: 12px 10px; border-top: 1px solid rgba(255,255,255,0.07); text-align: left; vertical-align: top; font-size: 14px; overflow-wrap: anywhere; }
+      th, td {
+        padding: 12px 10px;
+        border-top: 1px solid rgba(255,255,255,0.07);
+        text-align: left;
+        vertical-align: top;
+        font-size: 14px;
+        overflow-wrap: anywhere;
+      }
       th { border-top: none; background: rgba(255,255,255,0.04); text-transform: uppercase; letter-spacing: 0.02em; font-weight: 950; font-size: 12px; }
       .tag { display: inline-flex; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.14); font-weight: 950; font-size: 12px; letter-spacing: 0.03em; text-transform: uppercase; }
       .tag.new { border-color: rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); }
@@ -92,8 +100,27 @@
       .muted { color: var(--dim); }
       a { color: #c4b5fd; text-decoration: none; font-weight: 900; }
       .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; word-break: break-all; }
-      .right { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+      .right { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; align-items: center; }
       .err { color: rgba(254,202,202,1); font-weight: 800; }
+      .action-primary { min-width: 92px; }
+      .icon-btn {
+        min-width: 34px;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border-radius: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+      }
+      .icon-btn.warn {
+        border-color: rgba(245,158,11,0.65);
+        background: linear-gradient(135deg, rgba(245,158,11,0.28), rgba(139,92,246,0.14));
+      }
+      .pill { border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; padding: 8px 12px; font-weight: 800; font-size: 13px; background: rgba(255,255,255,0.03); }
+      .kv { display: grid; grid-template-columns: 170px 1fr; gap: 8px; font-size: 13px; }
+      .table-wrap { padding: 0; overflow-x: auto; }
       .modal-backdrop {
         position: fixed; inset: 0; background: rgba(0,0,0,0.55);
         display: none; align-items: center; justify-content: center; padding: 18px;
@@ -106,6 +133,9 @@
         padding: 14px;
       }
       pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 13px; color: rgba(255,255,255,0.88); }
+      @media (max-width: 1080px) {
+        .grid-2, .grid-3 { grid-template-columns: 1fr; }
+      }
     </style>
   </head>
   <body>
@@ -113,157 +143,224 @@
       <div class="row" style="justify-content: space-between; align-items: baseline;">
         <div>
           <h1>Content Factory</h1>
-          <p class="sub">Generate Cyber SEO blog drafts (Answer‑First, rich content, interlinking, FAQ schema) with a Preview → Approve workflow. Hidden from robots via basic auth + noindex.</p>
+          <p class="sub">Generate Cyber SEO drafts with Preview → Approve. Optimized workspace with tabs: daily queue, publishing, and one-time settings.</p>
         </div>
         <div class="muted mono">build: {{ build }}</div>
       </div>
 
-      <div class="panel">
-        <div class="row">
-          <input id="topic" style="flex: 1; min-width: 260px" placeholder="Topic (EN)" />
-          <input id="category" style="width: 200px" placeholder="Category (optional)" />
-          <input id="hero" style="width: 260px" placeholder="Hero image (optional, e.g. scaling-ai.jpg)" />
-          <select id="visibility" style="width: 170px">
-            <option value="public" selected>Public</option>
-            <option value="hidden">Hidden</option>
-          </select>
-          <button class="primary" id="createBtn">Create</button>
-          <button id="refreshBtn">Refresh</button>
-        </div>
-        <div class="muted" style="margin-top: 10px;">Tip: set `GEMINI_API_KEY` in the factory process env to enable AI generation. Without it, we generate a deterministic placeholder draft (for pipeline testing).</div>
+      <div class="tabs">
+        <button class="tab-btn active" data-tab="queueTab">Queue</button>
+        <button class="tab-btn" data-tab="publishingTab">Publishing</button>
+        <button class="tab-btn" data-tab="settingsTab">Settings</button>
       </div>
 
-      <div class="panel" id="discoverPanel">
-        <div class="row" style="justify-content: space-between;">
-          <div style="font-weight: 950; letter-spacing: -0.01em;">Topic Discovery</div>
-          <div class="muted" id="discoverMeta">Use EN direction, for example: "shopify ugc ads".</div>
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <input id="discoverDirection" style="flex: 1; min-width: 300px" placeholder="Direction (EN): Shopify UGC ads, TikTok creatives" />
-          <input id="discoverCategory" style="width: 210px" placeholder="Default category (optional)" />
-          <input id="discoverLimit" style="width: 120px" placeholder="Limit" value="15" />
-          <button class="primary" id="discoverBtn">Discover</button>
-        </div>
-        <div class="muted" style="margin-top: 10px;">Sources: Reddit + search suggestions. Click Add to queue to create draft jobs.</div>
-        <div style="margin-top: 12px; overflow-x: auto;">
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 35%;">Topic idea</th>
-                <th style="width: 14%;">Intent</th>
-                <th style="width: 10%;">Score</th>
-                <th style="width: 26%;">Sources</th>
-                <th style="width: 15%;">Action</th>
-              </tr>
-            </thead>
-            <tbody id="discoverTbody">
-              <tr><td colspan="5" class="muted" style="padding: 12px;">No results yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      <div class="panel" id="liPanel">
-        <div class="row" style="justify-content: space-between;">
-          <div style="font-weight: 950; letter-spacing: -0.01em;">LinkedIn</div>
-          <div class="muted" id="liStatusText">Loading...</div>
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <select id="liAs" style="width: 190px">
-            <option value="member" selected>Creator</option>
-            <option value="org">Company Page</option>
-          </select>
-          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="liIncludeLink" />Include link</label>
-          <input id="liOrgUrn" style="flex: 1; min-width: 320px" placeholder="Org URN (urn:li:organization:123456)" />
-          <button class="primary" id="liConnectBtn">Connect</button>
-          <button class="warn" id="liDisconnectBtn">Disconnect</button>
-        </div>
-        <div class="muted" style="margin-top: 10px;">Posts use the article hero image and an auto-generated summary under 3000 characters.</div>
-      </div>
-
-      <div class="panel" id="tgPanel">
-        <div class="row" style="justify-content: space-between;">
-          <div style="font-weight: 950; letter-spacing: -0.01em;">Telegram + X (Twitter)</div>
-          <div class="muted">Telegram posts are auto-adapted to RU. X publishes as a thread (carousel-like sequence).</div>
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <input id="tgChatId" style="width: 260px" placeholder="Telegram chat id (optional override, e.g. @mychannel)" />
-          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="tgIncludeLink" checked />Include link</label>
-          <span class="muted">X uses env token and posts thread automatically.</span>
-        </div>
-      </div>
-
-      <div class="panel" id="apPanel">
-        <div class="row" style="justify-content: space-between;">
-          <div style="font-weight: 950; letter-spacing: -0.01em;">Auto Publish Queue</div>
-          <div class="muted" id="apMeta">Runs 1 job per slot: first READY -> site publish -> selected socials.</div>
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apEnabled" />Enabled</label>
-          <select id="apTimes" style="width: 130px">
-            <option value="1">1/day</option>
-            <option value="2">2/day</option>
-            <option value="3" selected>3/day</option>
-            <option value="4">4/day</option>
-            <option value="5">5/day</option>
-            <option value="6">6/day</option>
-          </select>
-          <input id="apTimezone" style="width: 180px" placeholder="Timezone (e.g. UTC)" value="UTC" />
-          <input id="apStartHour" style="width: 110px" placeholder="Start hr" value="9" />
-          <input id="apEndHour" style="width: 110px" placeholder="End hr" value="21" />
-        </div>
-        <div class="row" style="margin-top: 10px;">
-          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apChLinkedin" checked />LinkedIn</label>
-          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apChTelegram" checked />Telegram</label>
-          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apChTwitter" checked />X Thread</label>
-          <button class="primary" id="apSaveBtn">Save schedule</button>
-          <button id="apRunBtn">Run now</button>
-          <button id="apRefreshBtn">Refresh runs</button>
-        </div>
-        <div class="muted" id="apStatus" style="margin-top:10px;">Loading auto publish settings...</div>
-        <div style="margin-top: 10px; overflow-x: auto;">
-          <table>
-            <thead>
-              <tr>
-                <th style="width: 16%;">Started</th>
-                <th style="width: 10%;">Trigger</th>
-                <th style="width: 10%;">Status</th>
-                <th style="width: 14%;">Job</th>
-                <th style="width: 50%;">Result</th>
-              </tr>
-            </thead>
-            <tbody id="apRunsTbody">
-              <tr><td colspan="5" class="muted" style="padding:12px;">No runs yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <section id="queueTab" class="tab-pane active">
+        <div class="grid-2">
+          <div class="stack">
+            <div class="panel">
+              <h3>Create Draft</h3>
+              <div class="row" style="margin-top: 10px;">
+                <input id="topic" style="flex: 1; min-width: 260px" placeholder="Topic (EN)" />
+                <input id="category" style="width: 220px" placeholder="Category (optional)" />
+                <input id="hero" style="width: 280px" placeholder="Hero image (optional)" />
+                <button class="primary" id="createBtn">Create</button>
+              </div>
+              <div class="muted" style="margin-top: 10px;">Uses default visibility from Settings. Tip: set `GEMINI_API_KEY` in factory env to enable AI generation.</div>
+            </div>
 
             <div class="panel">
-        <div class="row">
-          <input id="importSlug" list="importList" style="flex: 1; min-width: 260px" placeholder="Import existing post (slug or URL)" />
-          <button class="primary" id="importBtn">Import</button>
-        </div>
-        <datalist id="importList"></datalist>
-        <div class="muted" style="margin-top: 10px;">Import an existing /blog/&lt;slug&gt;.html into the factory as a draft so you can Rewrite → Preview → Publish without changing the URL.</div>
-      </div>
+              <h3>Import Existing Post</h3>
+              <div class="row" style="margin-top: 10px;">
+                <input id="importSlug" list="importList" style="flex: 1; min-width: 260px" placeholder="Import by slug or URL" />
+                <button class="primary" id="importBtn">Import</button>
+              </div>
+              <datalist id="importList"></datalist>
+              <div class="muted" style="margin-top: 10px;">Bring existing `/blog/<slug>.html` into factory for Rewrite → Preview → Publish.</div>
+            </div>
+          </div>
 
-<div class="panel" style="padding: 0; overflow-x: auto;">
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 30%;">Topic</th>
-              <th style="width: 10%;">Status</th>
-              <th style="width: 20%;">Slug</th>
-              <th style="width: 20%;">Meta</th>
-              <th style="width: 20%;">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="tbody">
-            <tr><td colspan="5" class="muted" style="padding: 16px;">Loading...</td></tr>
-          </tbody>
-        </table>
-      </div>
+          <div class="panel" id="discoverPanel">
+            <div class="row" style="justify-content: space-between;">
+              <h3>Topic Discovery</h3>
+              <div class="muted" id="discoverMeta">Use EN direction, for example: "shopify ugc ads".</div>
+            </div>
+            <div class="row" style="margin-top: 10px;">
+              <input id="discoverDirection" style="flex: 1; min-width: 240px" placeholder="Direction (EN): Shopify UGC ads" />
+              <input id="discoverCategory" style="width: 210px" placeholder="Default category (optional)" />
+              <input id="discoverLimit" style="width: 110px" placeholder="Limit" value="15" />
+              <button class="primary" id="discoverBtn">Discover</button>
+            </div>
+            <div class="muted" style="margin-top: 10px;">Sources: Reddit + search suggestions.</div>
+            <div style="margin-top: 12px; overflow-x: auto;">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 38%;">Topic idea</th>
+                    <th style="width: 14%;">Intent</th>
+                    <th style="width: 10%;">Score</th>
+                    <th style="width: 23%;">Sources</th>
+                    <th style="width: 15%;">Action</th>
+                  </tr>
+                </thead>
+                <tbody id="discoverTbody">
+                  <tr><td colspan="5" class="muted" style="padding: 12px;">No results yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" style="margin-top: 14px;">
+          <div class="row" style="justify-content: space-between;">
+            <div class="row">
+              <span class="pill">Jobs</span>
+              <select id="jobFilterStatus" style="width: 170px;">
+                <option value="ALL">All statuses</option>
+                <option value="NEW">New</option>
+                <option value="GENERATING">Generating</option>
+                <option value="READY">Ready</option>
+                <option value="PUBLISHED">Published</option>
+                <option value="ERROR">Error</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="muted" id="jobsMeta">-</span>
+              <button id="refreshBtn">Refresh</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel table-wrap" style="margin-top: 14px;">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 28%;">Topic</th>
+                <th style="width: 10%;">Status</th>
+                <th style="width: 18%;">Slug</th>
+                <th style="width: 18%;">Meta</th>
+                <th style="width: 26%;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="tbody">
+              <tr><td colspan="5" class="muted" style="padding: 16px;">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="publishingTab" class="tab-pane">
+        <div class="grid-2">
+          <div class="panel" id="liPanel">
+            <div class="row" style="justify-content: space-between;">
+              <h3>LinkedIn</h3>
+              <div class="muted" id="liStatusText">Loading...</div>
+            </div>
+            <div class="row" style="margin-top: 10px;">
+              <select id="liAs" style="width: 180px">
+                <option value="member" selected>Creator</option>
+                <option value="org">Company Page</option>
+              </select>
+              <label class="pill"><input type="checkbox" id="liIncludeLink" /> Include link</label>
+              <input id="liOrgUrn" style="flex: 1; min-width: 320px" placeholder="Org URN (urn:li:organization:123456)" />
+            </div>
+            <div class="row" style="margin-top: 10px;">
+              <button class="primary" id="liConnectBtn">Connect</button>
+              <button class="warn" id="liDisconnectBtn">Disconnect</button>
+            </div>
+          </div>
+
+          <div class="panel" id="tgPanel">
+            <h3>Telegram + X (Twitter)</h3>
+            <div class="row" style="margin-top: 10px;">
+              <input id="tgChatId" style="width: 280px" placeholder="Telegram chat id override (optional)" />
+              <label class="pill"><input type="checkbox" id="tgIncludeLink" checked /> Include link</label>
+            </div>
+            <div class="muted" style="margin-top: 10px;">Telegram posts are auto-adapted to RU. X publishes as thread.</div>
+          </div>
+        </div>
+
+        <div class="panel" id="apPanel" style="margin-top: 14px;">
+          <div class="row" style="justify-content: space-between;">
+            <h3>Auto Publish Queue</h3>
+            <div class="muted" id="apMeta">Each slot publishes first READY job to selected channels.</div>
+          </div>
+
+          <div class="grid-3" style="margin-top: 10px;">
+            <div class="row">
+              <label class="pill"><input type="checkbox" id="apEnabled" /> Enabled</label>
+              <select id="apTimes" style="width: 130px">
+                <option value="1">1/day</option>
+                <option value="2">2/day</option>
+                <option value="3" selected>3/day</option>
+                <option value="4">4/day</option>
+                <option value="5">5/day</option>
+                <option value="6">6/day</option>
+              </select>
+            </div>
+            <div class="row">
+              <input id="apTimezone" style="width: 170px" placeholder="Timezone" value="UTC" />
+              <input id="apStartHour" style="width: 100px" placeholder="Start" value="9" />
+              <input id="apEndHour" style="width: 100px" placeholder="End" value="21" />
+            </div>
+            <div class="row">
+              <label class="pill"><input type="checkbox" id="apChLinkedin" checked /> LinkedIn</label>
+              <label class="pill"><input type="checkbox" id="apChTelegram" checked /> Telegram</label>
+              <label class="pill"><input type="checkbox" id="apChTwitter" checked /> X</label>
+            </div>
+          </div>
+
+          <div class="row" style="margin-top: 10px;">
+            <button class="primary" id="apSaveBtn">Save schedule</button>
+            <button id="apRunBtn">Run now</button>
+            <button id="apRefreshBtn">Refresh runs</button>
+            <span class="muted" id="apStatus">Loading auto publish settings...</span>
+          </div>
+
+          <div style="margin-top: 10px; overflow-x: auto;">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width: 16%;">Started</th>
+                  <th style="width: 10%;">Trigger</th>
+                  <th style="width: 10%;">Status</th>
+                  <th style="width: 14%;">Job</th>
+                  <th style="width: 50%;">Result</th>
+                </tr>
+              </thead>
+              <tbody id="apRunsTbody">
+                <tr><td colspan="5" class="muted" style="padding:12px;">No runs yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="settingsTab" class="tab-pane">
+        <div class="grid-2">
+          <div class="panel">
+            <h3>Factory Defaults</h3>
+            <div class="row" style="margin-top: 10px;">
+              <label class="muted" style="font-weight:900;">Default visibility</label>
+              <select id="defaultVisibility" style="width: 180px;">
+                <option value="public" selected>Public</option>
+                <option value="hidden">Hidden</option>
+              </select>
+              <button class="primary" id="saveDefaultsBtn">Save defaults</button>
+            </div>
+            <div class="muted" style="margin-top:10px;">Used for Create Draft and Add from Discovery.</div>
+          </div>
+
+          <div class="panel">
+            <h3>One-time Integrations</h3>
+            <div class="kv" style="margin-top: 10px;">
+              <div class="muted">LinkedIn</div><div>Configure app scopes + connect in Publishing tab.</div>
+              <div class="muted">Telegram</div><div>Set <span class="mono">TELEGRAM_BOT_TOKEN</span> and <span class="mono">TELEGRAM_CHAT_ID</span> in env.</div>
+              <div class="muted">X/Twitter</div><div>Set <span class="mono">TWITTER_BEARER_TOKEN</span> (OAuth user token).</div>
+              <div class="muted">Gemini</div><div>Set <span class="mono">GEMINI_API_KEY</span> in factory process env.</div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div class="modal-backdrop" id="modalBackdrop">
@@ -320,14 +417,18 @@
       </div>
     </div>
 
-
     <script>
       function el(id) { return document.getElementById(id); }
       var BASE_PATH = window.location.pathname || '/';
       if (!BASE_PATH.endsWith('/')) BASE_PATH = BASE_PATH + '/';
       var BASE = new URL(BASE_PATH, window.location.origin);
-
       var _pollTimer = null;
+      var _allJobs = [];
+      var _li = { connected: false, memberUrn: null, orgUrn: null, orgUrnConfigured: false };
+      var _discoverItems = [];
+      var _postsLoaded = false;
+      var editJobId = null;
+
       function schedulePoll() {
         if (_pollTimer) return;
         _pollTimer = setTimeout(function() {
@@ -341,6 +442,16 @@
         return new URL(p.replace(/^\//, ''), BASE).toString();
       }
 
+      function escapeHtml(v) {
+        var str = String(v == null ? '' : v);
+        return str
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
       function tagClass(status) {
         var s = String(status || '').toLowerCase();
         if (s === 'ready') return 'ready';
@@ -350,7 +461,51 @@
         return 'new';
       }
 
-      var _li = { connected: false, memberUrn: null, orgUrn: null, orgUrnConfigured: false };
+      function switchTab(tabId) {
+        Array.prototype.forEach.call(document.querySelectorAll('.tab-pane'), function(p){
+          p.classList.toggle('active', p.id === tabId);
+        });
+        Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function(b){
+          b.classList.toggle('active', b.getAttribute('data-tab') === tabId);
+        });
+      }
+
+      function getDefaultVisibility() {
+        try {
+          var v = localStorage.getItem('factory.defaultVisibility');
+          if (v === 'public' || v === 'hidden') return v;
+        } catch (e) {}
+        return 'public';
+      }
+
+      function applyDefaultsUi() {
+        var dv = getDefaultVisibility();
+        if (el('defaultVisibility')) el('defaultVisibility').value = dv;
+      }
+
+      function saveDefaults() {
+        var v = (el('defaultVisibility') && el('defaultVisibility').value) ? el('defaultVisibility').value : 'public';
+        try { localStorage.setItem('factory.defaultVisibility', v); } catch (e) {}
+        alert('Defaults saved');
+      }
+
+      function filteredJobs() {
+        var status = (el('jobFilterStatus') && el('jobFilterStatus').value) ? el('jobFilterStatus').value : 'ALL';
+        if (status === 'ALL') return _allJobs.slice();
+        return _allJobs.filter(function(j){ return String(j.status || '').toUpperCase() === status; });
+      }
+
+      function postToSocial(jobId, channel) {
+        if (!channel) return;
+        if (channel === 'linkedin') return linkedinPublish(jobId);
+        if (channel === 'telegram') return telegramPublish(jobId);
+        if (channel === 'twitter') return twitterPublish(jobId);
+        if (channel === 'all') {
+          linkedinPublish(jobId);
+          telegramPublish(jobId);
+          twitterPublish(jobId);
+        }
+      }
 
       async function loadLinkedInStatus() {
         try {
@@ -411,7 +566,6 @@
             body: JSON.stringify(body)
           });
           if (out && out.success) {
-            alert('Posted to LinkedIn');
             schedulePoll();
           } else {
             alert((out && out.error) ? out.error : 'LinkedIn publish failed');
@@ -535,26 +689,13 @@
       async function runAutopublishNow() {
         if (!confirm('Run auto publish now?')) return;
         try {
-          var out = await api('/api/autopublish/run', { method: 'POST' });
+          await api('/api/autopublish/run', { method: 'POST' });
           await loadAutopublishRuns();
           await refresh();
-          alert('Run finished: ' + JSON.stringify((out && out.result) || {}));
         } catch (e) {
           alert(String((e && e.message) || e));
         }
       }
-
-      function escapeHtml(v) {
-        var str = String(v == null ? '' : v);
-        return str
-          .replace(/&/g, '&amp;')
-          .replace(/</g, '&lt;')
-          .replace(/>/g, '&gt;')
-          .replace(/"/g, '&quot;')
-          .replace(/'/g, '&#039;');
-      }
-
-      var _discoverItems = [];
 
       function renderDiscover(items) {
         var tbody = el('discoverTbody');
@@ -653,11 +794,7 @@
           return;
         }
 
-        var visEl = el('visibility');
-        var visibility = ((visEl && visEl.value) ? visEl.value : 'public').trim();
-
-        var defaultCat = (el('discoverCategory') && el('discoverCategory').value) ? el('discoverCategory').value.trim() : '';
-        var category = (it.category || defaultCat || '').trim();
+        var category = ((it.category || (el('discoverCategory') && el('discoverCategory').value) || '').trim());
 
         try {
           await api('/api/jobs', {
@@ -666,7 +803,7 @@
             body: JSON.stringify({
               topic: it.topic,
               category: category || undefined,
-              visibility: visibility,
+              visibility: getDefaultVisibility(),
             })
           });
           await refresh();
@@ -674,8 +811,6 @@
           alert(String((e && e.message) || e));
         }
       }
-
-      var _postsLoaded = false;
 
       async function loadPostSuggestions() {
         if (_postsLoaded) return;
@@ -690,9 +825,7 @@
             if (!v) return '';
             return '<option value="' + escapeHtml(v) + '">' + escapeHtml(p.title || '') + '</option>';
           }).join('');
-        } catch (e) {
-          // ignore
-        }
+        } catch (e) {}
       }
 
       async function api(path, opts) {
@@ -705,12 +838,14 @@
         return data;
       }
 
-      async function refresh() {
+      function renderJobs() {
         var tbody = el('tbody');
-        var data = await api('/api/jobs');
-        var jobs = (data && data.jobs) ? data.jobs : [];
+        var jobs = filteredJobs();
+        if (el('jobsMeta')) {
+          el('jobsMeta').textContent = 'showing ' + String(jobs.length) + ' of ' + String(_allJobs.length);
+        }
         if (!jobs.length) {
-          tbody.innerHTML = '<tr><td colspan="5" class="muted" style="padding: 16px;">No jobs yet.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="5" class="muted" style="padding: 16px;">No jobs for selected filter.</td></tr>';
           return;
         }
 
@@ -726,9 +861,9 @@
               ? '<div class="muted" style="margin-top:6px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">' + escapeHtml(j.description) + '</div>'
               : '')
             + '<div class="muted" style="margin-top:6px;">visibility: <span class="mono">' + escapeHtml(visibility) + '</span></div>'
-            + (j.linkedinStatus ? ('<div class="muted" style="margin-top:6px;">linkedin: <span class="mono">' + escapeHtml(j.linkedinStatus) + '</span>' + (j.linkedinError ? (' <span class="err">' + escapeHtml(j.linkedinError) + '</span>') : '') + '</div>') : '')
-            + (j.telegramStatus ? ('<div class="muted" style="margin-top:6px;">telegram: <span class="mono">' + escapeHtml(j.telegramStatus) + '</span>' + (j.telegramError ? (' <span class="err">' + escapeHtml(j.telegramError) + '</span>') : '') + '</div>') : '')
-            + (j.twitterStatus ? ('<div class="muted" style="margin-top:6px;">x: <span class="mono">' + escapeHtml(j.twitterStatus) + '</span>' + (j.twitterError ? (' <span class="err">' + escapeHtml(j.twitterError) + '</span>') : '') + '</div>') : '');
+            + (j.linkedinStatus ? ('<div class="muted" style="margin-top:4px;">li: <span class="mono">' + escapeHtml(j.linkedinStatus) + '</span></div>') : '')
+            + (j.telegramStatus ? ('<div class="muted" style="margin-top:4px;">tg: <span class="mono">' + escapeHtml(j.telegramStatus) + '</span></div>') : '')
+            + (j.twitterStatus ? ('<div class="muted" style="margin-top:4px;">x: <span class="mono">' + escapeHtml(j.twitterStatus) + '</span></div>') : '');
 
           var previewUrl = resolveUrl('/preview/' + j.id);
           var published = j.publishedUrl ? '<a href="' + j.publishedUrl + '" target="_blank" rel="noreferrer">live</a>' : '';
@@ -739,24 +874,12 @@
           var canPreview = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
           var canPublish = (!isGenerating) && (status === 'READY' || status === 'PUBLISHED');
           var canEdit = (status !== 'NEW');
+
           var liStatus = (j.linkedinStatus || '').toUpperCase();
-          var isPosting = (liStatus === 'POSTING');
-          var canLinkedIn = (!isGenerating) && (!isPosting) && (_li && _li.connected) && (status === 'READY' || status === 'PUBLISHED');
-          var isPosted = (liStatus === 'POSTED');
-          var liLabel = isPosting ? 'Posting...' : (isPosted ? 'Posted' : 'LinkedIn');
-          var liClass = isPosted ? 'linkedin-posted' : '';
-
           var tgStatus = (j.telegramStatus || '').toUpperCase();
-          var tgPosting = (tgStatus === 'POSTING');
-          var tgPosted = (tgStatus === 'POSTED');
-          var canTelegram = (!isGenerating) && (!tgPosting) && (status === 'READY' || status === 'PUBLISHED');
-          var tgLabel = tgPosting ? 'Posting...' : (tgPosted ? 'Telegramed' : 'Telegram');
-
           var twStatus = (j.twitterStatus || '').toUpperCase();
-          var twPosting = (twStatus === 'POSTING');
-          var twPosted = (twStatus === 'POSTED');
-          var canTwitter = (!isGenerating) && (!twPosting) && (status === 'READY' || status === 'PUBLISHED');
-          var twLabel = twPosting ? 'Posting...' : (twPosted ? 'X Posted' : 'X Thread');
+          var anyPosting = (liStatus === 'POSTING' || tgStatus === 'POSTING' || twStatus === 'POSTING');
+          var socialDisabled = isGenerating || anyPosting || !(status === 'READY' || status === 'PUBLISHED');
 
           var err = j.error ? '<div class="err" style="margin-top:6px;">' + escapeHtml(j.error) + '</div>' : '';
 
@@ -772,33 +895,41 @@
             + '<td>' + meta + '</td>'
             + '<td>'
             + '<div class="right">'
-            + '<button ' + (canGenerate ? '' : 'disabled') + ' onclick="generateJob(\'' + escapeHtml(j.id) + '\', \'' + escapeHtml(status) + '\')">' + genLabel + '</button>'
-            + '<button ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
-            + '<button class="good" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
-            + '<button class="' + liClass + '" ' + (canLinkedIn ? '' : 'disabled') + ' onclick="linkedinPublish(\'' + escapeHtml(j.id) + '\')">' + liLabel + '</button>'
-            + '<button ' + (canTelegram ? '' : 'disabled') + ' onclick="telegramPublish(\'' + escapeHtml(j.id) + '\')">' + tgLabel + '</button>'
-            + '<button ' + (canTwitter ? '' : 'disabled') + ' onclick="twitterPublish(\'' + escapeHtml(j.id) + '\')">' + twLabel + '</button>'
-            + '<button ' + (canEdit ? '' : 'disabled') + ' onclick="openEdit(\'' + escapeHtml(j.id) + '\')">Edit</button>'
-            + '<button class="warn" onclick="deleteJob(\'' + escapeHtml(j.id) + '\')">Delete</button>'
-            + '<button onclick="openLogs(\'' + escapeHtml(j.id) + '\')">Logs</button>'
+            + '<button class="action-primary" ' + (canGenerate ? '' : 'disabled') + ' onclick="generateJob(\'' + escapeHtml(j.id) + '\', \'' + escapeHtml(status) + '\')">' + genLabel + '</button>'
+            + '<button class="action-primary" ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
+            + '<button class="good action-primary" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
+            + '<select ' + (socialDisabled ? 'disabled' : '') + ' onchange="postToSocial(\'' + escapeHtml(j.id) + '\', this.value); this.value=\'\';" style="width:120px;">'
+            + '<option value="">Post</option>'
+            + '<option value="linkedin">LinkedIn</option>'
+            + '<option value="telegram">Telegram</option>'
+            + '<option value="twitter">X Thread</option>'
+            + '<option value="all">All</option>'
+            + '</select>'
+            + '<button class="icon-btn" title="Edit" ' + (canEdit ? '' : 'disabled') + ' onclick="openEdit(\'' + escapeHtml(j.id) + '\')">✎</button>'
+            + '<button class="icon-btn warn" title="Delete" onclick="deleteJob(\'' + escapeHtml(j.id) + '\')">🗑</button>'
+            + '<button class="icon-btn" title="Logs" onclick="openLogs(\'' + escapeHtml(j.id) + '\')">≡</button>'
             + published
             + '</div>'
             + '</td>'
             + '</tr>'
           );
         }).join('');
-      
-        var hasGenerating = jobs.some(function(x){ return (x && x.status) === 'GENERATING'; });
-        var hasPosting = jobs.some(function(x){ return ((x && String(x.linkedinStatus||'').toUpperCase()) === 'POSTING') || ((x && String(x.telegramStatus||'').toUpperCase()) === 'POSTING') || ((x && String(x.twitterStatus||'').toUpperCase()) === 'POSTING'); });
+
+        var hasGenerating = _allJobs.some(function(x){ return (x && x.status) === 'GENERATING'; });
+        var hasPosting = _allJobs.some(function(x){ return ((x && String(x.linkedinStatus||'').toUpperCase()) === 'POSTING') || ((x && String(x.telegramStatus||'').toUpperCase()) === 'POSTING') || ((x && String(x.twitterStatus||'').toUpperCase()) === 'POSTING'); });
         if (hasGenerating || hasPosting) schedulePoll();
+      }
+
+      async function refresh() {
+        var data = await api('/api/jobs');
+        _allJobs = (data && data.jobs) ? data.jobs : [];
+        renderJobs();
       }
 
       async function createJob() {
         var topic = (el('topic').value || '').trim();
         var category = (el('category').value || '').trim();
         var heroImage = (el('hero').value || '').trim();
-        var visEl = el('visibility');
-        var visibility = ((visEl && visEl.value) ? visEl.value : 'public').trim();
         if (!topic) return;
 
         try {
@@ -809,7 +940,7 @@
               topic: topic,
               category: category || undefined,
               heroImage: heroImage || undefined,
-              visibility: visibility,
+              visibility: getDefaultVisibility(),
             })
           });
           el('topic').value = '';
@@ -824,7 +955,6 @@
           if (!confirm('Rewrite this draft with AI? This will replace the current draft HTML.')) return;
         }
         try {
-          // Kick off generation, then refresh quickly to show GENERATING status.
           var p = api('/api/jobs/' + id + '/generate', { method: 'POST' });
           setTimeout(function(){ refresh().catch(function(){}); }, 250);
           var res = await p;
@@ -845,7 +975,7 @@
           var vis = (job.visibility || 'hidden');
           var msg = 'Publish to /var/www/landing/blog + commit/push?';
           if (vis === 'hidden') {
-            msg = 'Publish as HIDDEN?\n\nThe page will exist by direct URL, but it will NOT appear in blog index/sitemap and is not intended for public listing.\n\nContinue?';
+            msg = 'Publish as HIDDEN?\n\nThe page will exist by direct URL but will not appear in blog index/sitemap. Continue?';
           }
           if (!confirm(msg)) return;
 
@@ -884,8 +1014,6 @@
           el('logsPre').textContent = String((e && e.message) || e);
         }
       }
-
-      var editJobId = null;
 
       async function openEdit(id) {
         editJobId = id;
@@ -957,39 +1085,35 @@
         }
       }
 
-el('createBtn').addEventListener('click', createJob);
-      el('importBtn').addEventListener('click', importPost);
-      if (el('discoverBtn')) el('discoverBtn').addEventListener('click', discoverTopics);
-
-      if (el('liConnectBtn')) el('liConnectBtn').addEventListener('click', linkedinConnect);
-      if (el('liDisconnectBtn')) el('liDisconnectBtn').addEventListener('click', linkedinDisconnect);
-      loadLinkedInStatus();
-
-      el('refreshBtn').addEventListener('click', function() {
-        loadPostSuggestions();
-
-      refresh().catch(function(err) { alert(String((err && err.message) || err)); });
+      Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function(btn){
+        btn.addEventListener('click', function(){ switchTab(btn.getAttribute('data-tab')); });
       });
 
+      el('createBtn').addEventListener('click', createJob);
+      el('importBtn').addEventListener('click', importPost);
+      el('discoverBtn').addEventListener('click', discoverTopics);
+      el('liConnectBtn').addEventListener('click', linkedinConnect);
+      el('liDisconnectBtn').addEventListener('click', linkedinDisconnect);
+      el('refreshBtn').addEventListener('click', function(){ loadPostSuggestions(); refresh().catch(function(err){ alert(String((err && err.message) || err)); }); });
+      el('jobFilterStatus').addEventListener('change', renderJobs);
+      el('saveDefaultsBtn').addEventListener('click', saveDefaults);
       el('closeModal').addEventListener('click', function() { el('modalBackdrop').style.display = 'none'; });
       el('modalBackdrop').addEventListener('click', function(e) { if (e.target === el('modalBackdrop')) el('modalBackdrop').style.display = 'none'; });
-
       el('closeEdit').addEventListener('click', function() { el('editBackdrop').style.display = 'none'; });
       el('editBackdrop').addEventListener('click', function(e) { if (e.target === el('editBackdrop')) el('editBackdrop').style.display = 'none'; });
-
       el('saveEdit').addEventListener('click', saveEdit);
-      if (el('apSaveBtn')) el('apSaveBtn').addEventListener('click', saveAutopublish);
-      if (el('apRunBtn')) el('apRunBtn').addEventListener('click', runAutopublishNow);
-      if (el('apRefreshBtn')) el('apRefreshBtn').addEventListener('click', loadAutopublishRuns);
+      el('apSaveBtn').addEventListener('click', saveAutopublish);
+      el('apRunBtn').addEventListener('click', runAutopublishNow);
+      el('apRefreshBtn').addEventListener('click', loadAutopublishRuns);
 
+      applyDefaultsUi();
+      loadLinkedInStatus();
       loadPostSuggestions();
       loadAutopublish();
       loadAutopublishRuns();
-
       refresh().catch(function(err) {
         el('tbody').innerHTML = '<tr><td colspan="5" class="err" style="padding:16px;">' + escapeHtml((err && err.message) || String(err)) + '</td></tr>';
       });
     </script>
   </body>
 </html>
-
