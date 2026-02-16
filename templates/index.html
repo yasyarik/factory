@@ -193,6 +193,52 @@
         </div>
       </div>
 
+      <div class="panel" id="apPanel">
+        <div class="row" style="justify-content: space-between;">
+          <div style="font-weight: 950; letter-spacing: -0.01em;">Auto Publish Queue</div>
+          <div class="muted" id="apMeta">Runs 1 job per slot: first READY -> site publish -> selected socials.</div>
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apEnabled" />Enabled</label>
+          <select id="apTimes" style="width: 130px">
+            <option value="1">1/day</option>
+            <option value="2">2/day</option>
+            <option value="3" selected>3/day</option>
+            <option value="4">4/day</option>
+            <option value="5">5/day</option>
+            <option value="6">6/day</option>
+          </select>
+          <input id="apTimezone" style="width: 180px" placeholder="Timezone (e.g. UTC)" value="UTC" />
+          <input id="apStartHour" style="width: 110px" placeholder="Start hr" value="9" />
+          <input id="apEndHour" style="width: 110px" placeholder="End hr" value="21" />
+        </div>
+        <div class="row" style="margin-top: 10px;">
+          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apChLinkedin" checked />LinkedIn</label>
+          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apChTelegram" checked />Telegram</label>
+          <label class="muted" style="display:flex; gap:8px; align-items:center; font-weight:900; padding: 0 10px; border: 1px solid rgba(255,255,255,0.18); border-radius: 999px; background: rgba(255,255,255,0.04);"><input type="checkbox" id="apChTwitter" checked />X Thread</label>
+          <button class="primary" id="apSaveBtn">Save schedule</button>
+          <button id="apRunBtn">Run now</button>
+          <button id="apRefreshBtn">Refresh runs</button>
+        </div>
+        <div class="muted" id="apStatus" style="margin-top:10px;">Loading auto publish settings...</div>
+        <div style="margin-top: 10px; overflow-x: auto;">
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 16%;">Started</th>
+                <th style="width: 10%;">Trigger</th>
+                <th style="width: 10%;">Status</th>
+                <th style="width: 14%;">Job</th>
+                <th style="width: 50%;">Result</th>
+              </tr>
+            </thead>
+            <tbody id="apRunsTbody">
+              <tr><td colspan="5" class="muted" style="padding:12px;">No runs yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
             <div class="panel">
         <div class="row">
           <input id="importSlug" list="importList" style="flex: 1; min-width: 260px" placeholder="Import existing post (slug or URL)" />
@@ -411,6 +457,93 @@
         }
       }
 
+      async function loadAutopublish() {
+        try {
+          var st = await api('/api/autopublish/settings');
+          if (!(st && st.success)) return;
+          if (el('apEnabled')) el('apEnabled').checked = !!st.enabled;
+          if (el('apTimes')) el('apTimes').value = String(st.times_per_day || 3);
+          if (el('apTimezone')) el('apTimezone').value = st.timezone || 'UTC';
+          if (el('apStartHour')) el('apStartHour').value = String(st.start_hour == null ? 9 : st.start_hour);
+          if (el('apEndHour')) el('apEndHour').value = String(st.end_hour == null ? 21 : st.end_hour);
+
+          var ch = Array.isArray(st.channels) ? st.channels : [];
+          if (el('apChLinkedin')) el('apChLinkedin').checked = ch.indexOf('linkedin') >= 0;
+          if (el('apChTelegram')) el('apChTelegram').checked = ch.indexOf('telegram') >= 0;
+          if (el('apChTwitter')) el('apChTwitter').checked = ch.indexOf('twitter') >= 0;
+
+          var slots = Array.isArray(st.slots) ? st.slots.join(', ') : '-';
+          if (el('apStatus')) {
+            el('apStatus').textContent = 'enabled=' + String(!!st.enabled) + ', slots(h): ' + slots + ', last run: ' + (st.last_run_at || '-');
+          }
+        } catch (e) {
+          if (el('apStatus')) el('apStatus').textContent = 'Auto publish settings failed: ' + String((e && e.message) || e);
+        }
+      }
+
+      async function loadAutopublishRuns() {
+        var tbody = el('apRunsTbody');
+        if (!tbody) return;
+        try {
+          var out = await api('/api/autopublish/runs?limit=20');
+          var rows = (out && out.runs) ? out.runs : [];
+          if (!rows.length) {
+            tbody.innerHTML = '<tr><td colspan="5" class="muted" style="padding:12px;">No runs yet.</td></tr>';
+            return;
+          }
+          tbody.innerHTML = rows.map(function(r) {
+            var res = r.result ? escapeHtml(JSON.stringify(r.result)) : '-';
+            return '<tr>'
+              + '<td class="mono">' + escapeHtml(r.startedAt || '-') + '</td>'
+              + '<td>' + escapeHtml(r.trigger || '-') + '</td>'
+              + '<td><span class="tag ' + tagClass((r.status||'').toLowerCase()) + '">' + escapeHtml(r.status || '-') + '</span></td>'
+              + '<td class="mono">' + escapeHtml(r.jobId || '-') + '</td>'
+              + '<td class="mono">' + res + '</td>'
+              + '</tr>';
+          }).join('');
+        } catch (e) {
+          tbody.innerHTML = '<tr><td colspan="5" class="err" style="padding:12px;">' + escapeHtml(String((e && e.message) || e)) + '</td></tr>';
+        }
+      }
+
+      async function saveAutopublish() {
+        var channels = [];
+        if (el('apChLinkedin') && el('apChLinkedin').checked) channels.push('linkedin');
+        if (el('apChTelegram') && el('apChTelegram').checked) channels.push('telegram');
+        if (el('apChTwitter') && el('apChTwitter').checked) channels.push('twitter');
+
+        try {
+          await api('/api/autopublish/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              enabled: !!(el('apEnabled') && el('apEnabled').checked),
+              timesPerDay: parseInt((el('apTimes') && el('apTimes').value) ? el('apTimes').value : '3', 10),
+              timezone: (el('apTimezone') && el('apTimezone').value ? el('apTimezone').value : 'UTC').trim() || 'UTC',
+              startHour: parseInt((el('apStartHour') && el('apStartHour').value) ? el('apStartHour').value : '9', 10),
+              endHour: parseInt((el('apEndHour') && el('apEndHour').value) ? el('apEndHour').value : '21', 10),
+              channels: channels,
+            })
+          });
+          await loadAutopublish();
+          alert('Auto publish settings saved');
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
+      async function runAutopublishNow() {
+        if (!confirm('Run auto publish now?')) return;
+        try {
+          var out = await api('/api/autopublish/run', { method: 'POST' });
+          await loadAutopublishRuns();
+          await refresh();
+          alert('Run finished: ' + JSON.stringify((out && out.result) || {}));
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
       function escapeHtml(v) {
         var str = String(v == null ? '' : v);
         return str
@@ -521,7 +654,7 @@
         }
 
         var visEl = el('visibility');
-        var visibility = ((visEl && visEl.value) ? visEl.value : 'hidden').trim();
+        var visibility = ((visEl && visEl.value) ? visEl.value : 'public').trim();
 
         var defaultCat = (el('discoverCategory') && el('discoverCategory').value) ? el('discoverCategory').value.trim() : '';
         var category = (it.category || defaultCat || '').trim();
@@ -643,6 +776,8 @@
             + '<button ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
             + '<button class="good" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
             + '<button class="' + liClass + '" ' + (canLinkedIn ? '' : 'disabled') + ' onclick="linkedinPublish(\'' + escapeHtml(j.id) + '\')">' + liLabel + '</button>'
+            + '<button ' + (canTelegram ? '' : 'disabled') + ' onclick="telegramPublish(\'' + escapeHtml(j.id) + '\')">' + tgLabel + '</button>'
+            + '<button ' + (canTwitter ? '' : 'disabled') + ' onclick="twitterPublish(\'' + escapeHtml(j.id) + '\')">' + twLabel + '</button>'
             + '<button ' + (canEdit ? '' : 'disabled') + ' onclick="openEdit(\'' + escapeHtml(j.id) + '\')">Edit</button>'
             + '<button class="warn" onclick="deleteJob(\'' + escapeHtml(j.id) + '\')">Delete</button>'
             + '<button onclick="openLogs(\'' + escapeHtml(j.id) + '\')">Logs</button>'
@@ -663,7 +798,7 @@
         var category = (el('category').value || '').trim();
         var heroImage = (el('hero').value || '').trim();
         var visEl = el('visibility');
-        var visibility = ((visEl && visEl.value) ? visEl.value : 'hidden').trim();
+        var visibility = ((visEl && visEl.value) ? visEl.value : 'public').trim();
         if (!topic) return;
 
         try {
@@ -843,8 +978,13 @@ el('createBtn').addEventListener('click', createJob);
       el('editBackdrop').addEventListener('click', function(e) { if (e.target === el('editBackdrop')) el('editBackdrop').style.display = 'none'; });
 
       el('saveEdit').addEventListener('click', saveEdit);
+      if (el('apSaveBtn')) el('apSaveBtn').addEventListener('click', saveAutopublish);
+      if (el('apRunBtn')) el('apRunBtn').addEventListener('click', runAutopublishNow);
+      if (el('apRefreshBtn')) el('apRefreshBtn').addEventListener('click', loadAutopublishRuns);
 
       loadPostSuggestions();
+      loadAutopublish();
+      loadAutopublishRuns();
 
       refresh().catch(function(err) {
         el('tbody').innerHTML = '<tr><td colspan="5" class="err" style="padding:16px;">' + escapeHtml((err && err.message) || String(err)) + '</td></tr>';

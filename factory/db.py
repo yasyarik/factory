@@ -110,6 +110,48 @@ def db_init(path: str) -> None:
             "CREATE INDEX IF NOT EXISTS oauth_states_provider_created_idx ON oauth_states(provider, created_at);"
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS autopublish_settings (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              enabled INTEGER NOT NULL DEFAULT 0,
+              times_per_day INTEGER NOT NULL DEFAULT 3,
+              channels_json TEXT NOT NULL DEFAULT '["linkedin","telegram","twitter"]',
+              timezone TEXT NOT NULL DEFAULT 'UTC',
+              start_hour INTEGER NOT NULL DEFAULT 9,
+              end_hour INTEGER NOT NULL DEFAULT 21,
+              last_slot_key TEXT,
+              last_run_at TEXT,
+              updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO autopublish_settings (id, enabled, times_per_day, channels_json, timezone, start_hour, end_hour, updated_at)
+            SELECT 1, 0, 3, '["linkedin","telegram","twitter"]', 'UTC', 9, 21, ?
+            WHERE NOT EXISTS (SELECT 1 FROM autopublish_settings WHERE id = 1);
+            """,
+            (utcnow_iso(),),
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS autopublish_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              started_at TEXT NOT NULL,
+              finished_at TEXT,
+              trigger TEXT NOT NULL,
+              job_id TEXT,
+              status TEXT NOT NULL,
+              result_json TEXT
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS autopublish_runs_started_idx ON autopublish_runs(started_at);"
+        )
+
 
 @contextmanager
 def db_connect(path: str):

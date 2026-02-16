@@ -5,9 +5,15 @@ import difflib
 import sqlite3
 import secrets
 import re
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import urlparse
+
+try:
+    from zoneinfo import ZoneInfo
+except Exception:
+    ZoneInfo = None
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -62,6 +68,9 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 app = FastAPI()
 
+_AUTOPUBLISH_LOCK = threading.Lock()
+_AUTOPUBLISH_THREAD = None
+
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -109,6 +118,7 @@ def _sanitize_source_html(html: str | None) -> str | None:
 def _startup() -> None:
     _load_dotenv(os.path.join(APP_DIR, '.env'))
     db_init(DB_PATH)
+    _autopublish_start_scheduler()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -870,6 +880,300 @@ def delete_job(job_id: str):
         conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,))
 
     return {"success": True}
+
+
+# --- Auto Publish Scheduler ---
+
+def _ap_read_settings() -> dict[str, Any]:
+    with db_connect(DB_PATH) as conn:
+        r = conn.execute(
+            """
+            SELECT enabled, times_per_day, channels_json, timezone, start_hour, end_hour, last_slot_key, last_run_at
+            FROM autopublish_settings
+            WHERE id=1
+            """
+        ).fetchone()
+
+    if not r:
+        return {
+            "enabled": False,
+            "times_per_day": 3,
+            "channels": ["linkedin", "telegram", "twitter"],
+            "timezone": "UTC",
+            "start_hour": 9,
+            "end_hour": 21,
+            "last_slot_key": None,
+            "last_run_at": None,
+        }
+
+    channels = []
+    try:
+        parsed = json.loads(r[2] or "[]")
+        if isinstance(parsed, list):
+            channels = [str(x).strip().lower() for x in parsed if str(x).strip().lower() in ("linkedin", "telegram", "twitter")]
+    except Exception:
+        channels = []
+    if not channels:
+        channels = ["linkedin", "telegram", "twitter"]
+
+    return {
+        "enabled": bool(r[0]),
+        "times_per_day": int(r[1] or 3),
+        "channels": channels,
+        "timezone": (r[3] or "UTC").strip() or "UTC",
+        "start_hour": int(r[4] if r[4] is not None else 9),
+        "end_hour": int(r[5] if r[5] is not None else 21),
+        "last_slot_key": r[6],
+        "last_run_at": r[7],
+    }
+
+
+def _ap_write_settings(*, enabled: bool, times_per_day: int, channels: list[str], timezone_name: str, start_hour: int, end_hour: int, last_slot_key: str | None = None, last_run_at: str | None = None) -> None:
+    ch_json = json.dumps(channels)
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE autopublish_settings
+            SET enabled=?, times_per_day=?, channels_json=?, timezone=?, start_hour=?, end_hour=?,
+                last_slot_key=COALESCE(?, last_slot_key),
+                last_run_at=COALESCE(?, last_run_at),
+                updated_at=?
+            WHERE id=1
+            """,
+            (1 if enabled else 0, times_per_day, ch_json, timezone_name, start_hour, end_hour, last_slot_key, last_run_at, utcnow_iso()),
+        )
+
+
+def _ap_slots(times_per_day: int, start_hour: int, end_hour: int) -> list[int]:
+    n = max(1, min(8, int(times_per_day or 1)))
+    start = max(0, min(23, int(start_hour)))
+    end = max(0, min(23, int(end_hour)))
+    if end < start:
+        start, end = end, start
+    if n == 1:
+        return [int(round((start + end) / 2))]
+    step = (end - start) / max(1, (n - 1))
+    out = sorted(set(max(0, min(23, int(round(start + i * step)))) for i in range(n)))
+    if not out:
+        out = [start]
+    return out
+
+
+def _ap_now_local(tz_name: str) -> datetime:
+    tz_name = (tz_name or "UTC").strip() or "UTC"
+    if ZoneInfo:
+        try:
+            return datetime.now(ZoneInfo(tz_name))
+        except Exception:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _ap_wait_channel(job_id: str, channel: str, timeout_s: int = 240) -> tuple[bool, str | None, str | None]:
+    status_col = f"{channel}_status"
+    err_col = f"{channel}_error"
+    url_col = f"{channel}_post_url"
+
+    started = time.time()
+    while time.time() - started < timeout_s:
+        with db_connect(DB_PATH) as conn:
+            r = conn.execute(f"SELECT {status_col}, {err_col}, {url_col} FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not r:
+            return False, "job not found", None
+        st = (r[0] or "").upper().strip()
+        err = r[1]
+        url = r[2]
+        if st == "POSTED":
+            return True, None, url
+        if st == "ERROR":
+            return False, err or f"{channel} failed", None
+        time.sleep(2)
+
+    return False, f"{channel} timeout", None
+
+
+def _ap_log_run(started_at: str, finished_at: str, trigger: str, job_id: str | None, status: str, result: dict[str, Any]) -> None:
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO autopublish_runs (started_at, finished_at, trigger, job_id, status, result_json) VALUES (?, ?, ?, ?, ?, ?)",
+            (started_at, finished_at, trigger, job_id, status, json.dumps(result)),
+        )
+
+
+def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
+    if not _AUTOPUBLISH_LOCK.acquire(blocking=False):
+        return {"success": False, "status": "BUSY", "message": "autopublish already running"}
+
+    started = utcnow_iso()
+    try:
+        settings = _ap_read_settings()
+        channels = settings.get("channels") or []
+
+        if trigger != "manual" and not settings.get("enabled"):
+            result = {"success": False, "status": "DISABLED"}
+            _ap_log_run(started, utcnow_iso(), trigger, None, "DISABLED", result)
+            return result
+
+        with db_connect(DB_PATH) as conn:
+            j = conn.execute(
+                "SELECT id FROM jobs WHERE status='READY' ORDER BY created_at ASC LIMIT 1"
+            ).fetchone()
+
+        if not j:
+            result = {"success": True, "status": "NOOP", "message": "no READY jobs"}
+            _ap_log_run(started, utcnow_iso(), trigger, None, "NOOP", result)
+            return result
+
+        job_id = j[0]
+        summary: dict[str, Any] = {"job_id": job_id, "channels": {}, "site_publish": None}
+
+        # 1) publish site first
+        try:
+            out = publish(job_id)
+            summary["site_publish"] = {"ok": True, "url": (out or {}).get("url") if isinstance(out, dict) else None}
+        except Exception as e:
+            msg = f"site publish failed: {e}"
+            summary["site_publish"] = {"ok": False, "error": msg}
+            _ap_log_run(started, utcnow_iso(), trigger, job_id, "ERROR", summary)
+            return {"success": False, "status": "ERROR", **summary}
+
+        # 2) publish socials
+        if not channels:
+            channels = ["linkedin", "telegram", "twitter"]
+
+        for ch in channels:
+            try:
+                if ch == "linkedin":
+                    linkedin_publish(job_id, {"as": "member", "includeLink": True})
+                elif ch == "telegram":
+                    telegram_publish(job_id, {"includeLink": True})
+                elif ch == "twitter":
+                    twitter_publish(job_id, {})
+                else:
+                    continue
+
+                ok, err, url = _ap_wait_channel(job_id, ch)
+                summary["channels"][ch] = {"ok": ok, "error": err, "url": url}
+            except Exception as e:
+                summary["channels"][ch] = {"ok": False, "error": str(e), "url": None}
+
+        all_ok = all(v.get("ok") for v in summary["channels"].values()) if summary["channels"] else True
+        status = "DONE" if all_ok else "PARTIAL"
+        _ap_log_run(started, utcnow_iso(), trigger, job_id, status, summary)
+        return {"success": all_ok, "status": status, **summary}
+    finally:
+        _AUTOPUBLISH_LOCK.release()
+
+
+def _autopublish_loop() -> None:
+    while True:
+        try:
+            st = _ap_read_settings()
+            if st.get("enabled"):
+                now_local = _ap_now_local(st.get("timezone") or "UTC")
+                slots = _ap_slots(st.get("times_per_day") or 3, st.get("start_hour") or 9, st.get("end_hour") or 21)
+                if now_local.hour in slots and now_local.minute < 10:
+                    key = f"{now_local.date().isoformat()}-{now_local.hour:02d}"
+                    if key != (st.get("last_slot_key") or ""):
+                        _run_autopublish(trigger="schedule")
+                        _ap_write_settings(
+                            enabled=bool(st.get("enabled")),
+                            times_per_day=int(st.get("times_per_day") or 3),
+                            channels=list(st.get("channels") or ["linkedin", "telegram", "twitter"]),
+                            timezone_name=(st.get("timezone") or "UTC"),
+                            start_hour=int(st.get("start_hour") or 9),
+                            end_hour=int(st.get("end_hour") or 21),
+                            last_slot_key=key,
+                            last_run_at=utcnow_iso(),
+                        )
+        except Exception:
+            pass
+
+        time.sleep(30)
+
+
+def _autopublish_start_scheduler() -> None:
+    global _AUTOPUBLISH_THREAD
+    if _AUTOPUBLISH_THREAD and _AUTOPUBLISH_THREAD.is_alive():
+        return
+    _AUTOPUBLISH_THREAD = threading.Thread(target=_autopublish_loop, daemon=True, name="autopublish-scheduler")
+    _AUTOPUBLISH_THREAD.start()
+
+
+@app.get("/api/autopublish/settings")
+def autopublish_get_settings():
+    st = _ap_read_settings()
+    slots = _ap_slots(st.get("times_per_day") or 3, st.get("start_hour") or 9, st.get("end_hour") or 21)
+    return {"success": True, **st, "slots": slots}
+
+
+@app.put("/api/autopublish/settings")
+async def autopublish_set_settings(request: Request):
+    body = await request.json()
+
+    enabled = bool(body.get("enabled", False))
+    times_per_day = int(body.get("timesPerDay") or body.get("times_per_day") or 3)
+    times_per_day = max(1, min(8, times_per_day))
+
+    channels = body.get("channels") or ["linkedin", "telegram", "twitter"]
+    if not isinstance(channels, list):
+        raise HTTPException(status_code=400, detail="channels must be list")
+    channels = [str(x).strip().lower() for x in channels if str(x).strip().lower() in ("linkedin", "telegram", "twitter")]
+
+    timezone_name = (body.get("timezone") or "UTC").strip() or "UTC"
+    start_hour = int(body.get("startHour") if body.get("startHour") is not None else 9)
+    end_hour = int(body.get("endHour") if body.get("endHour") is not None else 21)
+    start_hour = max(0, min(23, start_hour))
+    end_hour = max(0, min(23, end_hour))
+
+    st = _ap_read_settings()
+    _ap_write_settings(
+        enabled=enabled,
+        times_per_day=times_per_day,
+        channels=channels,
+        timezone_name=timezone_name,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        last_slot_key=st.get("last_slot_key"),
+        last_run_at=st.get("last_run_at"),
+    )
+
+    return {"success": True}
+
+
+@app.post("/api/autopublish/run")
+def autopublish_run_now():
+    out = _run_autopublish(trigger="manual")
+    return {"success": True, "result": out}
+
+
+@app.get("/api/autopublish/runs")
+def autopublish_runs(limit: int = 20):
+    lim = max(1, min(100, int(limit or 20)))
+    with db_connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT id, started_at, finished_at, trigger, job_id, status, result_json FROM autopublish_runs ORDER BY id DESC LIMIT ?",
+            (lim,),
+        ).fetchall()
+
+    out = []
+    for r in rows:
+        try:
+            result = json.loads(r[6]) if r[6] else None
+        except Exception:
+            result = None
+        out.append({
+            "id": r[0],
+            "startedAt": r[1],
+            "finishedAt": r[2],
+            "trigger": r[3],
+            "jobId": r[4],
+            "status": r[5],
+            "result": result,
+        })
+
+    return {"success": True, "runs": out}
+
 
 
 # --- LinkedIn integration ---
