@@ -87,12 +87,16 @@ SOCIAL_ENV_KEYS = {
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     "TWITTER_BEARER_TOKEN",
+    "GEMINI_API_KEY",
+    "GEMINI_TEXT_MODEL",
+    "GEMINI_IMAGE_MODEL",
 }
 
 SOCIAL_SECRET_KEYS = {
     "LINKEDIN_CLIENT_SECRET",
     "TELEGRAM_BOT_TOKEN",
     "TWITTER_BEARER_TOKEN",
+    "GEMINI_API_KEY",
 }
 
 
@@ -380,6 +384,9 @@ def _social_settings_snapshot() -> dict[str, Any]:
     out["TELEGRAM_BOT_TOKEN"] = pick("TELEGRAM_BOT_TOKEN")
     out["TELEGRAM_CHAT_ID"] = pick("TELEGRAM_CHAT_ID")
     out["TWITTER_BEARER_TOKEN"] = pick("TWITTER_BEARER_TOKEN", "X_BEARER_TOKEN")
+    out["GEMINI_API_KEY"] = pick("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    out["GEMINI_TEXT_MODEL"] = pick("GEMINI_TEXT_MODEL", "GEMINI_MODEL_TEXT", "GEMINI_MODEL") or "gemini-2.5-flash"
+    out["GEMINI_IMAGE_MODEL"] = pick("GEMINI_IMAGE_MODEL", "GEMINI_MODEL_IMAGE") or "gemini-2.5-flash-image"
 
     masked: dict[str, Any] = {}
     for k in SOCIAL_ENV_KEYS:
@@ -2040,6 +2047,12 @@ async def settings_social_put(request: Request):
         updates["LI_PERSON_URN"] = updates["LINKEDIN_PERSON_URN"]
     if "LINKEDIN_AUTHOR_BIO" in updates:
         updates["LI_AUTHOR_BIO"] = updates["LINKEDIN_AUTHOR_BIO"]
+    if "GEMINI_API_KEY" in updates:
+        updates["GOOGLE_API_KEY"] = updates["GEMINI_API_KEY"]
+    if "GEMINI_TEXT_MODEL" in updates:
+        updates["GEMINI_MODEL_TEXT"] = updates["GEMINI_TEXT_MODEL"]
+    if "GEMINI_IMAGE_MODEL" in updates:
+        updates["GEMINI_MODEL_IMAGE"] = updates["GEMINI_IMAGE_MODEL"]
 
     if "LINKEDIN_CLIENT_ID" in clears:
         clears.add("LI_CLIENT_ID")
@@ -2051,6 +2064,12 @@ async def settings_social_put(request: Request):
         clears.add("LI_AUTHOR_BIO")
     if "TWITTER_BEARER_TOKEN" in clears:
         clears.add("X_BEARER_TOKEN")
+    if "GEMINI_API_KEY" in clears:
+        clears.add("GOOGLE_API_KEY")
+    if "GEMINI_TEXT_MODEL" in clears:
+        clears.add("GEMINI_MODEL_TEXT")
+    if "GEMINI_IMAGE_MODEL" in clears:
+        clears.add("GEMINI_MODEL_IMAGE")
 
     _env_write_updates(ENV_PATH, updates, clears)
 
