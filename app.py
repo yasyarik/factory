@@ -9,6 +9,8 @@ import threading
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import urlparse
+import urllib.request
+import urllib.error
 
 try:
     from zoneinfo import ZoneInfo
@@ -64,12 +66,14 @@ ENV_PATH = os.path.join(APP_DIR, ".env")
 LANDING_DIR = os.environ.get("LANDING_DIR", "/var/www/landing")
 BLOG_DIR = os.path.join(LANDING_DIR, "blog")
 SITEMAP_PATH = os.path.join(LANDING_DIR, "sitemap.xml")
+LOCALES = ("ru", "es", "de", "fr")
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 app = FastAPI()
 
 _AUTOPUBLISH_LOCK = threading.Lock()
+_TOPIC_DISCOVERY_LOCK = threading.Lock()
 _AUTOPUBLISH_THREAD = None
 
 
@@ -94,6 +98,108 @@ SOCIAL_SECRET_KEYS = {
 
 def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _locale_blog_dir(locale: str) -> str:
+    return os.path.join(LANDING_DIR, locale, "blog")
+
+
+def _locale_sitemap_path(locale: str) -> str:
+    return os.path.join(LANDING_DIR, f"sitemap-{locale}.xml")
+
+
+def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
+    canonical = f"https://myugc.studio/{locale}/blog/{slug}.html" if locale != "en" else f"https://myugc.studio/blog/{slug}.html"
+    alts = {
+        "en": f"https://myugc.studio/blog/{slug}.html",
+        "ru": f"https://myugc.studio/ru/blog/{slug}.html",
+        "es": f"https://myugc.studio/es/blog/{slug}.html",
+        "de": f"https://myugc.studio/de/blog/{slug}.html",
+        "fr": f"https://myugc.studio/fr/blog/{slug}.html",
+    }
+    block = (
+        f'<link href="{canonical}" rel="canonical"/>'
+        + "".join([f'<link href="{u}" hreflang="{k}" rel="alternate"/>' for k, u in alts.items()])
+        + f'<link href="{alts["en"]}" hreflang="x-default" rel="alternate"/>'
+    )
+    html = re.sub(r'(?is)<link\s+rel="canonical"[^>]*>', '', html)
+    html = re.sub(r'(?is)<link\s+href="[^"]+"\s+hreflang="[^"]+"\s+rel="alternate"\s*/?>', '', html)
+    if "</head>" in html:
+        html = html.replace("</head>", block + "</head>", 1)
+    return html
+
+
+def _translate_post_payload(
+    *,
+    api_key: str,
+    model: str,
+    locale: str,
+    slug: str,
+    title: str,
+    description: str,
+    category: str,
+    content_html: str,
+    faq: list[dict[str, Any]],
+) -> dict[str, Any]:
+    prompt = {
+        "task": "translate_blog_post_html",
+        "target_language": locale,
+        "rules": [
+            "Translate naturally, keep meaning and structure.",
+            "All human-readable output must be in target language, except product/brand names and technical acronyms.",
+            "Do not leave title/description/body in English when target language is not English.",
+            "Do NOT translate brand name 'My UGC Studio'.",
+            "Keep all links, image src, filenames, and URLs unchanged.",
+            "Keep valid HTML. Preserve tags and heading hierarchy.",
+            "Return STRICT JSON only.",
+        ],
+        "input": {
+            "slug": slug,
+            "title": title,
+            "description": description,
+            "category": category,
+            "contentHtml": content_html,
+            "faq": faq,
+        },
+        "output_shape": {
+            "title": "string",
+            "description": "string",
+            "category": "string",
+            "contentHtml": "string",
+            "faq": [{"question": "string", "answer": "string"}],
+        },
+    }
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    body = {
+        "generationConfig": {"responseMimeType": "application/json"},
+        "contents": [{"role": "user", "parts": [{"text": json.dumps(prompt, ensure_ascii=False)}]}],
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        raw = json.loads(resp.read().decode("utf-8"))
+
+    text = (((raw.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text") or ""
+    text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+    text = re.sub(r"\s*```$", "", text)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
+    out = json.loads(text)
+
+    return {
+        "title": (out.get("title") or title).strip(),
+        "description": (out.get("description") or description).strip(),
+        "category": (out.get("category") or category).strip() or category,
+        "contentHtml": out.get("contentHtml") or content_html,
+        "faq": out.get("faq") if isinstance(out.get("faq"), list) else faq,
+    }
 
 
 def _save_social_post(
@@ -443,6 +549,289 @@ async def api_topics_discover(request: Request):
     return {"success": True, **data}
 
 
+def _td_read_settings() -> dict[str, Any]:
+    with db_connect(DB_PATH) as conn:
+        r = conn.execute(
+            """
+            SELECT enabled, timezone, run_hour, direction, category_hint, per_run_limit, min_score, top_n, last_run_key, last_run_at
+            FROM topic_discovery_settings
+            WHERE id=1
+            """
+        ).fetchone()
+    if not r:
+        return {
+            "enabled": False,
+            "timezone": "UTC",
+            "runHour": 6,
+            "direction": "",
+            "categoryHint": "",
+            "perRunLimit": 15,
+            "minScore": 55.0,
+            "topN": 3,
+            "lastRunKey": None,
+            "lastRunAt": None,
+        }
+    return {
+        "enabled": bool(r[0]),
+        "timezone": (r[1] or "UTC").strip() or "UTC",
+        "runHour": int(r[2] if r[2] is not None else 6),
+        "direction": (r[3] or "").strip(),
+        "categoryHint": (r[4] or "").strip(),
+        "perRunLimit": int(r[5] if r[5] is not None else 15),
+        "minScore": float(r[6] if r[6] is not None else 55.0),
+        "topN": int(r[7] if r[7] is not None else 3),
+        "lastRunKey": r[8],
+        "lastRunAt": r[9],
+    }
+
+
+def _td_write_settings(
+    *,
+    enabled: bool,
+    timezone_name: str,
+    run_hour: int,
+    direction: str,
+    category_hint: str,
+    per_run_limit: int,
+    min_score: float,
+    top_n: int,
+    last_run_key: str | None = None,
+    last_run_at: str | None = None,
+) -> None:
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE topic_discovery_settings
+            SET enabled=?, timezone=?, run_hour=?, direction=?, category_hint=?,
+                per_run_limit=?, min_score=?, top_n=?,
+                last_run_key=COALESCE(?, last_run_key),
+                last_run_at=COALESCE(?, last_run_at),
+                updated_at=?
+            WHERE id=1
+            """,
+            (
+                1 if enabled else 0,
+                timezone_name,
+                run_hour,
+                direction,
+                category_hint,
+                per_run_limit,
+                min_score,
+                top_n,
+                last_run_key,
+                last_run_at,
+                utcnow_iso(),
+            ),
+        )
+
+
+def _td_log_run(started_at: str, finished_at: str, trigger: str, direction: str, status: str, found_count: int, queued_count: int, result: dict[str, Any]) -> None:
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO topic_discovery_runs (started_at, finished_at, trigger, direction, status, found_count, queued_count, result_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (started_at, finished_at, trigger, direction, status, int(found_count), int(queued_count), json.dumps(result, ensure_ascii=False)),
+        )
+
+
+def _topic_key(s: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", (s or "").lower())).strip()
+
+
+def _topic_is_queueable(topic: str) -> bool:
+    t = (topic or "").strip()
+    if len(t) < 14 or len(t) > 95:
+        return False
+    lo = t.lower()
+    banned = (
+        "frankly shocking",
+        "what kind of business model",
+        "don't pay for the upgrade",
+        "later addressed",
+        "reversed course",
+        "this isn't a",
+    )
+    if any(b in lo for b in banned):
+        return False
+    if t.count(".") > 1 or t.count("!") > 1 or t.count("?") > 1:
+        return False
+    if "$" in t and len(t) > 70:
+        return False
+    return True
+
+
+def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not _TOPIC_DISCOVERY_LOCK.acquire(blocking=False):
+        return {"success": False, "status": "BUSY", "message": "topic discovery already running"}
+
+    started = utcnow_iso()
+    try:
+        base = _td_read_settings()
+        cfg = dict(base)
+        if isinstance(override, dict):
+            cfg.update({k: v for k, v in override.items() if v is not None})
+
+        direction = str(cfg.get("direction") or "").strip()
+        if len(direction) < 3:
+            result = {"success": False, "status": "ERROR", "message": "direction is required"}
+            _td_log_run(started, utcnow_iso(), trigger, direction, "ERROR", 0, 0, result)
+            return result
+
+        category_hint = str(cfg.get("categoryHint") or "").strip() or None
+        per_run_limit = max(5, min(30, int(cfg.get("perRunLimit") or 15)))
+        min_score = float(cfg.get("minScore") if cfg.get("minScore") is not None else 55.0)
+        top_n = max(1, min(12, int(cfg.get("topN") or 3)))
+
+        data = discover_topics(direction=direction, limit=per_run_limit, category_hint=category_hint)
+        items = list(data.get("items") or [])
+
+        # Filter by score and keep best N.
+        scored = []
+        for it in items:
+            try:
+                sc = float(it.get("score") if it.get("score") is not None else 0)
+            except Exception:
+                sc = 0.0
+            if sc >= min_score and (it.get("topic") or "").strip():
+                scored.append((sc, it))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        picked = [it for _, it in scored[:top_n]]
+
+        with db_connect(DB_PATH) as conn:
+            rows = conn.execute("SELECT topic FROM jobs").fetchall()
+            existing_topic_keys = {_topic_key(r[0] or "") for r in rows}
+
+        queued = 0
+        queued_topics: list[str] = []
+        for it in picked:
+            topic = (it.get("topic") or "").strip()
+            if not topic:
+                continue
+            if not _topic_is_queueable(topic):
+                continue
+            tk = _topic_key(topic)
+            if not tk or tk in existing_topic_keys:
+                continue
+            existing_topic_keys.add(tk)
+
+            category = (it.get("category") or category_hint or "").strip() or None
+            slug = (it.get("topic") or "").strip().lower()
+            slug = re.sub(r"[^a-z0-9\\s-]", "", slug)
+            slug = re.sub(r"\\s+", "-", slug).strip("-")
+            slug = slug[:120] if slug else None
+            now = utcnow_iso()
+            job_id = secrets.token_hex(12)
+
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO jobs (id, topic, slug, status, category, visibility, product_mode, created_at, updated_at)
+                    VALUES (?, ?, ?, 'NEW', ?, 'public', 0, ?, ?)
+                    """,
+                    (job_id, topic, slug, category, now, now),
+                )
+            log_event(DB_PATH, job_id, "NEW", "Job created by topic autodiscovery")
+            queued += 1
+            queued_topics.append(topic)
+
+        result = {
+            "success": True,
+            "status": "DONE",
+            "direction": direction,
+            "foundCount": len(items),
+            "eligibleCount": len(scored),
+            "queuedCount": queued,
+            "queuedTopics": queued_topics,
+        }
+        _td_log_run(started, utcnow_iso(), trigger, direction, "DONE", len(items), queued, result)
+        return result
+    except Exception as e:
+        result = {"success": False, "status": "ERROR", "message": str(e)}
+        _td_log_run(started, utcnow_iso(), trigger, str((override or {}).get("direction") or ""), "ERROR", 0, 0, result)
+        return result
+    finally:
+        _TOPIC_DISCOVERY_LOCK.release()
+
+
+@app.get("/api/topics/autodiscovery/settings")
+def topic_autodiscovery_get_settings():
+    _autopublish_start_scheduler()
+    return {"success": True, **_td_read_settings()}
+
+
+@app.put("/api/topics/autodiscovery/settings")
+async def topic_autodiscovery_set_settings(request: Request):
+    _autopublish_start_scheduler()
+    body = await request.json()
+
+    enabled = bool(body.get("enabled", False))
+    timezone_name = (body.get("timezone") or "UTC").strip() or "UTC"
+    try:
+        run_hour = int(body.get("runHour") if body.get("runHour") is not None else 6)
+    except Exception:
+        run_hour = 6
+    run_hour = max(0, min(23, run_hour))
+
+    direction = (body.get("direction") or "").strip()
+    if enabled and len(direction) < 3:
+        raise HTTPException(status_code=400, detail="direction is required when enabled")
+
+    category_hint = (body.get("categoryHint") or "").strip()
+    try:
+        per_run_limit = int(body.get("perRunLimit") if body.get("perRunLimit") is not None else 15)
+    except Exception:
+        per_run_limit = 15
+    per_run_limit = max(5, min(30, per_run_limit))
+
+    try:
+        min_score = float(body.get("minScore") if body.get("minScore") is not None else 55.0)
+    except Exception:
+        min_score = 55.0
+    min_score = max(0.0, min(100.0, min_score))
+
+    try:
+        top_n = int(body.get("topN") if body.get("topN") is not None else 3)
+    except Exception:
+        top_n = 3
+    top_n = max(1, min(12, top_n))
+
+    st = _td_read_settings()
+    _td_write_settings(
+        enabled=enabled,
+        timezone_name=timezone_name,
+        run_hour=run_hour,
+        direction=direction,
+        category_hint=category_hint,
+        per_run_limit=per_run_limit,
+        min_score=min_score,
+        top_n=top_n,
+        last_run_key=st.get("lastRunKey"),
+        last_run_at=st.get("lastRunAt"),
+    )
+    return {"success": True}
+
+
+@app.post("/api/topics/autodiscovery/run")
+async def topic_autodiscovery_run(request: Request):
+    _autopublish_start_scheduler()
+    body = await request.json()
+    override = {
+        "direction": (body.get("direction") or "").strip() if isinstance(body, dict) else "",
+        "categoryHint": (body.get("categoryHint") or "").strip() if isinstance(body, dict) else "",
+        "perRunLimit": body.get("perRunLimit") if isinstance(body, dict) else None,
+        "minScore": body.get("minScore") if isinstance(body, dict) else None,
+        "topN": body.get("topN") if isinstance(body, dict) else None,
+    }
+    # keep persisted config, override only explicitly passed fields
+    override = {k: v for k, v in override.items() if v not in (None, "")}
+    out = _run_topic_autodiscovery(trigger="manual", override=override)
+    if not out.get("success"):
+        raise HTTPException(status_code=400, detail=out.get("message") or "autodiscovery failed")
+    return out
+
+
 @app.get("/api/posts")
 def list_posts():
     posts = list_existing_posts(BLOG_DIR)
@@ -617,7 +1006,7 @@ def generate(job_id: str):
         before_desc = (draft.get("description") or "").strip()
         draft["description"] = fit_meta_description(draft.get("description"), fallback=topic or draft.get("title"))
         if draft["description"] != before_desc:
-            log_event(DB_PATH, job_id, "INFO", f"Auto-fit meta description length: {len(before_desc)} -> {len(draft["description"])}")
+            log_event(DB_PATH, job_id, "INFO", f"Auto-fit meta description length: {len(before_desc)} -> {len(draft['description'])}")
 
         problems = validate_draft(draft)
         if not problems:
@@ -806,6 +1195,7 @@ def publish(job_id: str):
         noindex=noindex,
     )
 
+    html = _apply_hreflang_block(html, slug, "en")
     out_path = os.path.join(BLOG_DIR, f"{slug}.html")
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -827,12 +1217,100 @@ def publish(job_id: str):
         )
         upsert_sitemap_url(SITEMAP_PATH, url=url)
 
-    # Git commit+push (include images)
-    paths = [
-        os.path.join("blog", f"{slug}.html"),
-        os.path.join("blog", "index.html"),
-        "sitemap.xml",
-    ] + (image_paths or [])
+    paths = [os.path.join("blog", f"{slug}.html"), os.path.join("blog", "index.html"), "sitemap.xml"] + (image_paths or [])
+
+    # Publish localized versions (ru/es/de/fr) in the same publish action.
+    text_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    text_model = (
+        os.environ.get("GEMINI_TEXT_MODEL")
+        or os.environ.get("GEMINI_MODEL_TEXT")
+        or os.environ.get("GEMINI_MODEL")
+        or "gemini-2.5-flash"
+    )
+    toc_titles = {
+        "ru": "На этой странице",
+        "es": "En esta página",
+        "de": "Auf dieser Seite",
+        "fr": "Sur cette page",
+    }
+    for loc in LOCALES:
+        loc_blog_dir = _locale_blog_dir(loc)
+        loc_sitemap = _locale_sitemap_path(loc)
+        loc_url = f"https://myugc.studio/{loc}/blog/{slug}.html"
+        loc_out_rel = os.path.join(loc, "blog", f"{slug}.html")
+        loc_idx_rel = os.path.join(loc, "blog", "index.html")
+        loc_title = title or ""
+        loc_desc = desc or ""
+        loc_cat = cat or "Strategy"
+        loc_content = content_html
+        loc_faq = faq
+
+        if text_api_key:
+            try:
+                tr = _translate_post_payload(
+                    api_key=text_api_key,
+                    model=text_model,
+                    locale=loc,
+                    slug=slug,
+                    title=loc_title,
+                    description=loc_desc,
+                    category=loc_cat,
+                    content_html=loc_content,
+                    faq=loc_faq,
+                )
+                loc_title = tr["title"]
+                loc_desc = tr["description"]
+                loc_cat = tr["category"]
+                loc_content = tr["contentHtml"]
+                loc_faq = tr["faq"]
+            except Exception as e:
+                log_event(DB_PATH, job_id, "WARN", f"Localization {loc} failed, fallback to EN: {e}")
+        else:
+            log_event(DB_PATH, job_id, "WARN", f"Localization {loc} skipped: no GEMINI_API_KEY/GOOGLE_API_KEY")
+
+        loc_html = render_post_html(
+            blog_dir=BLOG_DIR,
+            title=loc_title,
+            description=loc_desc,
+            category=loc_cat,
+            slug=slug,
+            hero_image=hero or "logo.png",
+            content_html=loc_content,
+            faq=loc_faq,
+            sources=sources,
+            updated_at=updated_at or utcnow_iso(),
+            noindex=noindex,
+            toc_title=toc_titles.get(loc, "On this page"),
+        )
+        loc_html = re.sub(r'(?is)<html\s+lang="[^"]+"', f'<html lang="{loc}"', loc_html, count=1)
+        loc_html = _apply_hreflang_block(loc_html, slug, loc)
+
+        os.makedirs(loc_blog_dir, exist_ok=True)
+        with open(os.path.join(loc_blog_dir, f"{slug}.html"), "w", encoding="utf-8") as f:
+            f.write(loc_html)
+
+        if noindex:
+            remove_blog_index_card(
+                loc_blog_dir,
+                slug=slug,
+                href_prefix=f"/{loc}/blog",
+                marker_prefix=f"FACTORY-{loc.upper()}",
+            )
+            remove_sitemap_url(loc_sitemap, url=loc_url)
+        else:
+            upsert_blog_index_card(
+                loc_blog_dir,
+                slug=slug,
+                title=loc_title,
+                description=loc_desc,
+                category=loc_cat,
+                hero_image=f"/blog/{os.path.basename(hero or 'logo.png')}",
+                href_prefix=f"/{loc}/blog",
+                marker_prefix=f"FACTORY-{loc.upper()}",
+            )
+            upsert_sitemap_url(loc_sitemap, url=loc_url)
+
+        paths.extend([loc_out_rel, loc_idx_rel, f"sitemap-{loc}.xml"])
 
     # de-dupe while preserving order
     seen = set()
@@ -1015,6 +1493,8 @@ def unpublish(job_id: str):
     out_rel = os.path.join("blog", f"{slug}.html")
     out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
     url = f"https://myugc.studio/blog/{slug}.html"
+    remove_paths = [out_rel]
+    add_paths = [os.path.join("blog", "index.html"), "sitemap.xml"]
 
     if os.path.exists(out_abs):
         os.remove(out_abs)
@@ -1022,11 +1502,28 @@ def unpublish(job_id: str):
     remove_blog_index_card(BLOG_DIR, slug=slug)
     remove_sitemap_url(SITEMAP_PATH, url=url)
 
+    for loc in LOCALES:
+        loc_blog_dir = _locale_blog_dir(loc)
+        loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
+        loc_rel = os.path.join(loc, "blog", f"{slug}.html")
+        loc_url = f"https://myugc.studio/{loc}/blog/{slug}.html"
+        if os.path.exists(loc_abs):
+            os.remove(loc_abs)
+        remove_blog_index_card(
+            loc_blog_dir,
+            slug=slug,
+            href_prefix=f"/{loc}/blog",
+            marker_prefix=f"FACTORY-{loc.upper()}",
+        )
+        remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
+        remove_paths.append(loc_rel)
+        add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
+
     git_commit_push_with_remove(
         repo_dir=LANDING_DIR,
         message=f"Unpublish post: {slug}",
-        add_paths=[os.path.join("blog", "index.html"), "sitemap.xml"],
-        remove_paths=[out_rel],
+        add_paths=add_paths,
+        remove_paths=remove_paths,
     )
 
     with db_connect(DB_PATH) as conn:
@@ -1066,11 +1563,32 @@ def delete_job(job_id: str):
         remove_blog_index_card(BLOG_DIR, slug=slug)
         remove_sitemap_url(SITEMAP_PATH, url=url)
 
+        for loc in LOCALES:
+            loc_blog_dir = _locale_blog_dir(loc)
+            loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
+            loc_rel = os.path.join(loc, "blog", f"{slug}.html")
+            loc_url = f"https://myugc.studio/{loc}/blog/{slug}.html"
+
+            if os.path.exists(loc_abs):
+                os.remove(loc_abs)
+                removed_paths.append(loc_rel)
+
+            remove_blog_index_card(
+                loc_blog_dir,
+                slug=slug,
+                href_prefix=f"/{loc}/blog",
+                marker_prefix=f"FACTORY-{loc.upper()}",
+            )
+            remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
+
     if removed_paths:
+        add_paths = [os.path.join("blog", "index.html"), "sitemap.xml"]
+        for loc in LOCALES:
+            add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
         git_commit_push_with_remove(
             repo_dir=LANDING_DIR,
             message=f"Delete factory post: {slug}",
-            add_paths=[os.path.join("blog", "index.html"), "sitemap.xml"],
+            add_paths=add_paths,
             remove_paths=removed_paths,
         )
 
@@ -1222,34 +1740,73 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
             _ap_log_run(started, utcnow_iso(), trigger, None, "DISABLED", result)
             return result
 
-        with db_connect(DB_PATH) as conn:
-            j = conn.execute(
-                "SELECT id FROM jobs WHERE status='READY' ORDER BY created_at ASC LIMIT 1"
-            ).fetchone()
+        if not channels:
+            channels = ["linkedin", "telegram", "twitter"]
 
-        if not j:
-            result = {"success": True, "status": "NOOP", "message": "no READY jobs"}
+        with db_connect(DB_PATH) as conn:
+            rows = conn.execute(
+                """
+                SELECT id, slug, published_url,
+                       COALESCE(linkedin_status, ''),
+                       COALESCE(telegram_status, ''),
+                       COALESCE(twitter_status, '')
+                FROM jobs
+                WHERE status='READY'
+                ORDER BY created_at ASC
+                LIMIT 300
+                """
+            ).fetchall()
+
+        selected = None
+        for r in rows:
+            jid, slug, published_url, li_st, tg_st, tw_st = r
+            st_map = {
+                "linkedin": (li_st or "").upper().strip(),
+                "telegram": (tg_st or "").upper().strip(),
+                "twitter": (tw_st or "").upper().strip(),
+            }
+            has_unposted_channel = any(st_map.get(ch, "") != "POSTED" for ch in channels)
+            if has_unposted_channel:
+                selected = (jid, slug, (published_url or "").strip())
+                break
+
+        if not selected:
+            result = {"success": True, "status": "NOOP", "message": "no eligible READY jobs"}
             _ap_log_run(started, utcnow_iso(), trigger, None, "NOOP", result)
             return result
 
-        job_id = j[0]
+        job_id, slug, published_url = selected
         summary: dict[str, Any] = {"job_id": job_id, "channels": {}, "site_publish": None}
 
         # 1) publish site first
         try:
-            out = publish(job_id)
-            summary["site_publish"] = {"ok": True, "url": (out or {}).get("url") if isinstance(out, dict) else None}
+            if published_url:
+                summary["site_publish"] = {"ok": True, "url": published_url, "skipped": True}
+            else:
+                out = publish(job_id)
+                summary["site_publish"] = {"ok": True, "url": (out or {}).get("url") if isinstance(out, dict) else None}
         except Exception as e:
             msg = f"site publish failed: {e}"
             summary["site_publish"] = {"ok": False, "error": msg}
             _ap_log_run(started, utcnow_iso(), trigger, job_id, "ERROR", summary)
             return {"success": False, "status": "ERROR", **summary}
 
-        # 2) publish socials
-        if not channels:
-            channels = ["linkedin", "telegram", "twitter"]
+        # 2) publish socials only for channels not yet POSTED
+        with db_connect(DB_PATH) as conn:
+            st = conn.execute(
+                "SELECT COALESCE(linkedin_status,''), COALESCE(telegram_status,''), COALESCE(twitter_status,'') FROM jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        st_map = {
+            "linkedin": (st[0] if st else "").upper().strip(),
+            "telegram": (st[1] if st else "").upper().strip(),
+            "twitter": (st[2] if st else "").upper().strip(),
+        }
 
         for ch in channels:
+            if st_map.get(ch, "") == "POSTED":
+                summary["channels"][ch] = {"ok": True, "error": None, "url": None, "skipped": True}
+                continue
             try:
                 if ch == "linkedin":
                     linkedin_publish(job_id, {"includeLink": bool(settings.get("linkedin_include_link"))})
@@ -1295,6 +1852,28 @@ def _autopublish_loop() -> None:
                             telegram_include_link=bool(st.get("telegram_include_link")),
                             last_slot_key=key,
                             last_run_at=utcnow_iso(),
+                        )
+
+            # Daily topic autodiscovery (uses same scheduler thread)
+            td = _td_read_settings()
+            if td.get("enabled"):
+                now_local = _ap_now_local(td.get("timezone") or "UTC")
+                run_hour = max(0, min(23, int(td.get("runHour") if td.get("runHour") is not None else 6)))
+                if now_local.hour == run_hour and now_local.minute < 10:
+                    key = f"{now_local.date().isoformat()}-{run_hour:02d}"
+                    if key != (td.get("lastRunKey") or ""):
+                        out = _run_topic_autodiscovery(trigger="schedule")
+                        _td_write_settings(
+                            enabled=bool(td.get("enabled")),
+                            timezone_name=(td.get("timezone") or "UTC"),
+                            run_hour=run_hour,
+                            direction=str(td.get("direction") or ""),
+                            category_hint=str(td.get("categoryHint") or ""),
+                            per_run_limit=int(td.get("perRunLimit") or 15),
+                            min_score=float(td.get("minScore") if td.get("minScore") is not None else 55.0),
+                            top_n=int(td.get("topN") or 3),
+                            last_run_key=key,
+                            last_run_at=utcnow_iso() if out.get("success") else td.get("lastRunAt"),
                         )
         except Exception:
             pass

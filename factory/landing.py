@@ -112,7 +112,7 @@ def _ensure_heading_ids(content_html: str) -> tuple[str, list[dict[str, str]]]:
     return out, toc
 
 
-def _render_toc(toc: list[dict[str, str]]) -> str:
+def _render_toc(toc: list[dict[str, str]], title: str = "On this page") -> str:
     if not toc:
         return ""
 
@@ -135,7 +135,7 @@ def _render_toc(toc: list[dict[str, str]]) -> str:
 
     return (
         "<aside class=\"toc-box\">"
-        "<div class=\"toc-title\">On this page</div>"
+        "<div class=\"toc-title\">" + _html_escape(title or "On this page") + "</div>"
         "<ul class=\"toc-items\">"
         + "".join(items)
         + "</ul></aside>"
@@ -202,6 +202,7 @@ def render_post_html(
     sources: list[dict[str, str]] | None,
     updated_at: str,
     noindex: bool,
+    toc_title: str = "On this page",
 ) -> str:
     template_path = os.path.join(blog_dir, "template.html")
     src = _read(template_path)
@@ -264,7 +265,7 @@ def render_post_html(
             out_parts.append(f'<section id="{_html_escape(sid)}">' + h2 + after + "</section>")
         content_html = "".join(out_parts)
 
-    toc_html = _render_toc(toc_model)
+    toc_html = _render_toc(toc_model, toc_title)
     sources_html = _render_sources(sources) if noindex else ""
 
     url = f"https://myugc.studio/blog/{slug}.html"
@@ -396,49 +397,26 @@ def upsert_blog_index_card(
     description: str,
     category: str,
     hero_image: str,
+    href_prefix: str = "/blog",
+    marker_prefix: str = "FACTORY",
 ) -> None:
     index_path = os.path.join(blog_dir, "index.html")
     src = _read(index_path)
 
-    href = f"/blog/{slug}.html"
-
-
-    href = f"/blog/{slug}.html"
-
-
-    marker = f"<!-- FACTORY:{slug} -->"
-
+    clean_prefix = "/" + href_prefix.strip("/")
+    href = f"{clean_prefix}/{slug}.html"
+    marker = f"<!-- {marker_prefix}:{slug} -->"
 
     if marker in src:
-
-
         pattern = re.compile(
-
-
             re.escape(marker)
-
-
-            + r"\\s*<a\\s+href=\\\"/blog/"
-
-
-            + re.escape(slug)
-
-
-            + r"\\.html\\\"[\\s\\S]*?</a>\\s*",
-
-
+            + r'\s*<a[^>]+href="'
+            + re.escape(href)
+            + r'"[\s\S]*?</a>\s*',
             flags=re.IGNORECASE,
-
-
         )
-
-
-        src = pattern.sub("", src)
-
-
+        src = pattern.sub("", src, count=1)
     elif href in src:
-
-
         return
 
     excerpt = description.strip()
@@ -446,7 +424,7 @@ def upsert_blog_index_card(
         excerpt = excerpt[:167].rstrip() + "..."
 
     card = (
-        f'\n            <!-- FACTORY:{slug} -->\n'
+        f'\n            <!-- {marker_prefix}:{slug} -->\n'
         f'            <a href="{href}" class="blog-card">\n'
         f'                <div class="card-image" style="background-image: url(\'{_html_escape(hero_image)}\');"></div>\n'
         f'                <div class="card-content">\n'
@@ -470,22 +448,30 @@ def upsert_blog_index_card(
 
 
 
-def remove_blog_index_card(blog_dir: str, *, slug: str) -> None:
+def remove_blog_index_card(
+    blog_dir: str,
+    *,
+    slug: str,
+    href_prefix: str = "/blog",
+    marker_prefix: str = "FACTORY",
+) -> None:
     index_path = os.path.join(blog_dir, "index.html")
     try:
         src = _read(index_path)
     except Exception:
         return
 
-    marker = f"<!-- FACTORY:{slug} -->"
+    clean_prefix = "/" + href_prefix.strip("/")
+    href = f"{clean_prefix}/{slug}.html"
+    marker = f"<!-- {marker_prefix}:{slug} -->"
     if marker not in src:
         return
 
     pattern = re.compile(
         re.escape(marker)
-        + r'\s*<a\s+href="/blog/'
-        + re.escape(slug)
-        + r'\.html"[\s\S]*?</a>\s*',
+        + r'\s*<a[^>]+href="'
+        + re.escape(href)
+        + r'"[\s\S]*?</a>\s*',
         flags=re.IGNORECASE,
     )
     out = pattern.sub("", src, count=1)
@@ -559,4 +545,3 @@ def git_commit_push(*, repo_dir: str, message: str, paths: list[str]) -> None:
         return
 
     subprocess.check_call(["git", "-C", repo_dir, "push", "origin", "main"])
-

@@ -182,6 +182,76 @@ def db_init(path: str) -> None:
             "CREATE INDEX IF NOT EXISTS social_posts_job_channel_idx ON social_posts(job_id, channel, created_at);"
         )
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS topic_discovery_settings (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              enabled INTEGER NOT NULL DEFAULT 0,
+              timezone TEXT NOT NULL DEFAULT 'UTC',
+              run_hour INTEGER NOT NULL DEFAULT 6,
+              direction TEXT,
+              category_hint TEXT,
+              per_run_limit INTEGER NOT NULL DEFAULT 15,
+              min_score REAL NOT NULL DEFAULT 55.0,
+              top_n INTEGER NOT NULL DEFAULT 3,
+              last_run_key TEXT,
+              last_run_at TEXT,
+              updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO topic_discovery_settings (id, enabled, timezone, run_hour, per_run_limit, min_score, top_n, updated_at)
+            SELECT 1, 0, 'UTC', 6, 15, 55.0, 3, ?
+            WHERE NOT EXISTS (SELECT 1 FROM topic_discovery_settings WHERE id = 1);
+            """,
+            (utcnow_iso(),),
+        )
+
+        td_cols = [r[1] for r in conn.execute("PRAGMA table_info(topic_discovery_settings);").fetchall()]
+        if "enabled" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN enabled INTEGER NOT NULL DEFAULT 0;")
+        if "timezone" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN timezone TEXT NOT NULL DEFAULT 'UTC';")
+        if "run_hour" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN run_hour INTEGER NOT NULL DEFAULT 6;")
+        if "direction" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN direction TEXT;")
+        if "category_hint" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN category_hint TEXT;")
+        if "per_run_limit" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN per_run_limit INTEGER NOT NULL DEFAULT 15;")
+        if "min_score" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN min_score REAL NOT NULL DEFAULT 55.0;")
+        if "top_n" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN top_n INTEGER NOT NULL DEFAULT 3;")
+        if "last_run_key" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN last_run_key TEXT;")
+        if "last_run_at" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN last_run_at TEXT;")
+        if "updated_at" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';")
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS topic_discovery_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              started_at TEXT NOT NULL,
+              finished_at TEXT,
+              trigger TEXT NOT NULL,
+              direction TEXT,
+              status TEXT NOT NULL,
+              found_count INTEGER NOT NULL DEFAULT 0,
+              queued_count INTEGER NOT NULL DEFAULT 0,
+              result_json TEXT
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS topic_discovery_runs_started_idx ON topic_discovery_runs(started_at);"
+        )
+
 
 @contextmanager
 def db_connect(path: str):

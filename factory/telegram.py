@@ -36,6 +36,32 @@ def _truncate(s: str, max_len: int) -> str:
     return cut.rstrip(" ,;:-")
 
 
+def _split_text_for_telegram(text: str, max_len: int = 3900) -> list[str]:
+    s = (text or "").strip()
+    if not s:
+        return []
+    if len(s) <= max_len:
+        return [s]
+
+    parts: list[str] = []
+    while len(s) > max_len:
+        cut = s[:max_len]
+        bp = cut.rfind("\n\n")
+        if bp < int(max_len * 0.5):
+            bp = cut.rfind("\n")
+        if bp < int(max_len * 0.5):
+            bp = cut.rfind(" ")
+        if bp < int(max_len * 0.5):
+            bp = max_len
+        part = s[:bp].strip()
+        if part:
+            parts.append(part)
+        s = s[bp:].strip()
+    if s:
+        parts.append(s)
+    return parts
+
+
 def _to_telegram_html(text: str) -> str:
     src = text or ""
     out: list[str] = []
@@ -50,15 +76,14 @@ def _to_telegram_html(text: str) -> str:
 
 def _generate_ru_post(api_key: str, model: str, *, title: str, description: str, body: str) -> str:
     prompt = (
-        "Ты редактор Telegram-канала про маркетинг, UGC и AI. "
-        "Напиши пост на русском языке по материалу статьи. "
-        "Сохрани суть, факты и практические шаги из источника. "
-        "Не используй шаблонные пустые фразы. "
-        "Структура: хук, почему это важно, ключевые тезисы (буллеты), практические шаги (буллеты), вывод+CTA, хэштеги. "
-        "Длина 1200-3500 символов. "
-        "Используй переносы строк и читабельные абзацы. "
-        "Если по контексту нужен SaaS для UGC/автоматизации, упоминай My UGC Studio. "
-        "Верни только готовый текст поста, без объяснений."
+        "Ты опытный редактор русскоязычного Telegram-канала про маркетинг, UGC и AI. "
+        "Сделай качественный пост по статье: живой, логичный, с естественными переходами между блоками. "
+        "Это НЕ дословный перевод, а осмысленная адаптация под Telegram. "
+        "Сохрани все ключевые факты и практическую пользу из источника. "
+        "Обязательная структура: сильный хук, зачем это важно, конкретные тезисы в буллетах, пошаговые действия, вывод и CTA, затем хэштеги. "
+        "Используй нормальные абзацы и читаемый формат. "
+        "Название бренда My UGC Studio никогда не переводи и не искажай. "
+        "Не добавляй объяснений вне поста. Верни только готовый текст поста."
     )
 
     user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\n"
@@ -68,7 +93,7 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
     for _ in range(3):
         payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + user}]}],
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 1800},
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2600},
         }
         try:
             r = requests.post(url, json=payload, timeout=60)
@@ -100,48 +125,53 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
     body = _truncate(body, 7000)
 
     draft = _generate_ru_post(api_key, model, title=title, description=description, body=body)
-    out = _truncate(draft, 3900)
-    if include_link and url:
-        out = _truncate(out, 3800) + "\n\n" + url
+    out = (draft or "").strip()
+    if include_link and url and (url not in out):
+        out = out + "\n\n" + url
     return out
 
 
 def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: str | None = None, hero_public_url: str | None = None) -> dict[str, Any]:
     base = f"https://api.telegram.org/bot{bot_token}"
 
-    full_text = _truncate((text or "").strip(), 3900)
-    html_text = _to_telegram_html(full_text)
+    full_text = (text or "").strip()
+    if not full_text:
+        raise RuntimeError("Telegram text is empty")
 
-    if photo_abs_path and len(full_text) <= 1000:
-        try:
-            with open(photo_abs_path, "rb") as f:
-                files = {"photo": f}
-                data = {
-                    "chat_id": chat_id,
-                    "caption": html_text,
-                    "parse_mode": "HTML",
-                }
-                rp = requests.post(base + "/sendPhoto", data=data, files=files, timeout=90)
-            if rp.status_code >= 400:
-                raise RuntimeError(f"sendPhoto failed: {rp.status_code} {rp.text}")
-            sent_photo = rp.json()
-            return {"photo": sent_photo, "message": sent_photo, "mode": "photo_caption", "sent_text": full_text}
-        except Exception:
-            pass
+    chunks = _split_text_for_telegram(full_text, 3900)
+    if not chunks:
+        raise RuntimeError("Telegram text is empty after split")
 
-    if hero_public_url:
-        hidden = f'<a href="{html.escape(hero_public_url)}">&#8205;</a>\n'
-        html_text = hidden + html_text
+    # Always send full post text via sendMessage (caption mode truncates/looks cut).
+    # Photo preview is attached via hidden link when hero_public_url is available.
+    sent_messages: list[dict[str, Any]] = []
+    for idx, chunk in enumerate(chunks):
+        html_text = _to_telegram_html(chunk)
+        if idx == 0 and hero_public_url:
+            hidden = f'<a href="{html.escape(hero_public_url)}">&#8205;</a>\n'
+            html_text = hidden + html_text
+        rm = requests.post(
+            base + "/sendMessage",
+            data={
+                "chat_id": chat_id,
+                "text": html_text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": (False if idx == 0 else True),
+            },
+            timeout=60,
+        )
+        if rm.status_code >= 400:
+            raise RuntimeError(f"sendMessage failed: {rm.status_code} {rm.text}")
+        sent_messages.append(rm.json())
 
-    rm = requests.post(
-        base + "/sendMessage",
-        data={"chat_id": chat_id, "text": html_text, "parse_mode": "HTML", "disable_web_page_preview": False},
-        timeout=60,
-    )
-    if rm.status_code >= 400:
-        raise RuntimeError(f"sendMessage failed: {rm.status_code} {rm.text}")
-    msg = rm.json()
-    return {"photo": None, "message": msg, "mode": "text", "sent_text": full_text}
+    first_msg = sent_messages[0] if sent_messages else None
+    return {
+        "photo": None,
+        "message": first_msg,
+        "messages": sent_messages,
+        "mode": ("text_single" if len(sent_messages) == 1 else "text_multi"),
+        "sent_text": full_text,
+    }
 
 
 def telegram_message_url(chat_id: str, message_id: int | None) -> str | None:

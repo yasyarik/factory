@@ -192,6 +192,22 @@
               <button class="primary" id="discoverBtn">Discover</button>
             </div>
             <div class="muted" style="margin-top: 10px;">Sources: Reddit + search suggestions.</div>
+            <div class="panel" style="margin-top:10px; padding:10px;">
+              <div class="row" style="justify-content: space-between;">
+                <div class="row">
+                  <label class="pill"><input type="checkbox" id="tdEnabled" /> Auto discovery</label>
+                  <input id="tdRunHour" style="width: 110px" placeholder="Hour (0-23)" value="6" />
+                  <input id="tdTimezone" style="width: 170px" placeholder="Timezone" value="UTC" />
+                  <input id="tdMinScore" style="width: 120px" placeholder="Min score" value="55" />
+                  <input id="tdTopN" style="width: 110px" placeholder="Top N" value="3" />
+                </div>
+                <div class="row">
+                  <button id="tdSaveBtn">Save auto</button>
+                  <button class="primary" id="tdRunBtn">Run now</button>
+                </div>
+              </div>
+              <div class="muted" id="tdStatus" style="margin-top:8px;">Auto discovery settings: loading...</div>
+            </div>
             <div style="margin-top: 12px; overflow-x: auto;">
               <table>
                 <thead>
@@ -806,6 +822,82 @@
         }
       }
 
+      async function loadTopicAutodiscovery() {
+        try {
+          var st = await api('/api/topics/autodiscovery/settings');
+          if (el('tdEnabled')) el('tdEnabled').checked = !!st.enabled;
+          if (el('tdRunHour')) el('tdRunHour').value = String((typeof st.runHour !== 'undefined') ? st.runHour : 6);
+          if (el('tdTimezone')) el('tdTimezone').value = (st.timezone || 'UTC');
+          if (el('tdMinScore')) el('tdMinScore').value = String((typeof st.minScore !== 'undefined') ? st.minScore : 55);
+          if (el('tdTopN')) el('tdTopN').value = String((typeof st.topN !== 'undefined') ? st.topN : 3);
+          if (el('tdStatus')) {
+            el('tdStatus').textContent = 'Auto: ' + (st.enabled ? 'enabled' : 'disabled')
+              + ', run at ' + String(st.runHour) + ':00 ' + String(st.timezone || 'UTC')
+              + ', last run: ' + (st.lastRunAt || '-');
+          }
+        } catch (e) {
+          if (el('tdStatus')) el('tdStatus').textContent = 'Auto discovery load failed: ' + String((e && e.message) || e);
+        }
+      }
+
+      async function saveTopicAutodiscovery() {
+        try {
+          var direction = ((el('discoverDirection') && el('discoverDirection').value) ? el('discoverDirection').value : '').trim();
+          var categoryHint = ((el('discoverCategory') && el('discoverCategory').value) ? el('discoverCategory').value : '').trim();
+          var perRunLimit = parseInt((el('discoverLimit') && el('discoverLimit').value) ? el('discoverLimit').value : '15', 10);
+          if (!Number.isFinite(perRunLimit)) perRunLimit = 15;
+
+          await api('/api/topics/autodiscovery/settings', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              enabled: !!(el('tdEnabled') && el('tdEnabled').checked),
+              timezone: ((el('tdTimezone') && el('tdTimezone').value) ? el('tdTimezone').value : 'UTC').trim() || 'UTC',
+              runHour: parseInt((el('tdRunHour') && el('tdRunHour').value) ? el('tdRunHour').value : '6', 10),
+              direction: direction,
+              categoryHint: categoryHint || undefined,
+              perRunLimit: perRunLimit,
+              minScore: parseFloat((el('tdMinScore') && el('tdMinScore').value) ? el('tdMinScore').value : '55'),
+              topN: parseInt((el('tdTopN') && el('tdTopN').value) ? el('tdTopN').value : '3', 10),
+            })
+          });
+          await loadTopicAutodiscovery();
+          alert('Topic autodiscovery settings saved');
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
+      async function runTopicAutodiscoveryNow() {
+        try {
+          var direction = ((el('discoverDirection') && el('discoverDirection').value) ? el('discoverDirection').value : '').trim();
+          if (!direction) {
+            alert('Enter Direction first');
+            return;
+          }
+          var categoryHint = ((el('discoverCategory') && el('discoverCategory').value) ? el('discoverCategory').value : '').trim();
+          var perRunLimit = parseInt((el('discoverLimit') && el('discoverLimit').value) ? el('discoverLimit').value : '15', 10);
+          if (!Number.isFinite(perRunLimit)) perRunLimit = 15;
+
+          var out = await api('/api/topics/autodiscovery/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              direction: direction,
+              categoryHint: categoryHint || undefined,
+              perRunLimit: perRunLimit,
+              minScore: parseFloat((el('tdMinScore') && el('tdMinScore').value) ? el('tdMinScore').value : '55'),
+              topN: parseInt((el('tdTopN') && el('tdTopN').value) ? el('tdTopN').value : '3', 10),
+            })
+          });
+          await refresh();
+          await loadTopicAutodiscovery();
+          alert('Added to queue: ' + String((out && out.queuedCount) || 0));
+        } catch (e) {
+          alert(String((e && e.message) || e));
+        }
+      }
+
       function renderDiscover(items) {
         var tbody = el('discoverTbody');
         var arr = Array.isArray(items) ? items : [];
@@ -1008,7 +1100,7 @@
             + '<div class="right">'
             + '<button class="action-primary" ' + (canGenerate ? '' : 'disabled') + ' onclick="generateJob(\'' + escapeHtml(j.id) + '\', \'' + escapeHtml(status) + '\')">' + genLabel + '</button>'
             + '<button class="action-primary" ' + (canPreview ? '' : 'disabled') + ' onclick="window.open(\'' + previewUrl + '\', \'_blank\')">Preview</button>'
-            + '<button class="good action-primary" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
+            + '<button id="pubbtn-' + escapeHtml(j.id) + '" class="good action-primary" ' + (canPublish ? '' : 'disabled') + ' onclick="publishJob(\'' + escapeHtml(j.id) + '\')">Publish</button>'
             + '<select ' + (socialDisabled ? 'disabled' : '') + ' onchange="postToSocial(\'' + escapeHtml(j.id) + '\', this.value); this.value=\'\';" style="width:120px;">'
             + '<option value="">Post</option>'
             + '<option value="linkedin">LinkedIn</option>'
@@ -1080,8 +1172,14 @@
         }
       }
 
+      var _publishingJobs = {};
       async function publishJob(id) {
+        if (_publishingJobs[id]) return;
         try {
+          _publishingJobs[id] = true;
+          var btn = document.getElementById('pubbtn-' + id);
+          var btnText = btn ? btn.textContent : '';
+          if (btn) { btn.disabled = true; btn.textContent = 'Publishing...'; }
           var gj = await api('/api/jobs/' + id);
           var job = (gj && gj.job) ? gj.job : {};
           var vis = (job.visibility || 'hidden');
@@ -1099,6 +1197,11 @@
         } catch (e) {
           alert(String((e && e.message) || e));
         } finally {
+          _publishingJobs[id] = false;
+          try {
+            var btn2 = document.getElementById('pubbtn-' + id);
+            if (btn2) btn2.textContent = btnText || 'Publish';
+          } catch (e3) {}
           try { await refresh(); } catch (e2) { alert(String((e2 && e2.message) || e2)); }
         }
       }
@@ -1204,6 +1307,8 @@
       el('createBtn').addEventListener('click', createJob);
       el('importBtn').addEventListener('click', importPost);
       el('discoverBtn').addEventListener('click', discoverTopics);
+      el('tdSaveBtn').addEventListener('click', saveTopicAutodiscovery);
+      el('tdRunBtn').addEventListener('click', runTopicAutodiscoveryNow);
       el('liConnectBtn').addEventListener('click', linkedinConnect);
       el('liDisconnectBtn').addEventListener('click', linkedinDisconnect);
       el('refreshBtn').addEventListener('click', function(){ loadPostSuggestions(); refresh().catch(function(err){ alert(String((err && err.message) || err)); }); });
@@ -1224,6 +1329,7 @@
       loadLinkedInStatus();
       loadSocialSettings();
       loadPostSuggestions();
+      loadTopicAutodiscovery();
       loadAutopublish();
       loadAutopublishRuns();
       refresh().catch(function(err) {
