@@ -6,6 +6,33 @@ import subprocess
 from datetime import datetime, timezone
 
 
+
+def _site_origin() -> str:
+    raw = (os.environ.get('SITE_ORIGIN') or 'https://myugc.studio').strip()
+    return raw.rstrip('/')
+
+
+def _site_name() -> str:
+    return (os.environ.get('SITE_NAME') or os.environ.get('BRAND_NAME') or 'My UGC Studio').strip() or 'My UGC Studio'
+
+def _cta_box_html() -> str:
+    enabled = (os.environ.get('SITE_CTA_ENABLED') or '').strip().lower()
+    if enabled not in ('1', 'true', 'yes', 'on'):
+        return ''
+    title = (os.environ.get('SITE_CTA_TITLE') or '').strip() or 'Ready to take the next step?'
+    text = (os.environ.get('SITE_CTA_TEXT') or '').strip()
+    btn_text = (os.environ.get('SITE_CTA_BUTTON_TEXT') or '').strip() or 'Learn more'
+    btn_url = (os.environ.get('SITE_CTA_BUTTON_URL') or '').strip() or '/'
+    out = '<div class=\"cta-box\">'
+    out += f'<h2>{_html_escape(title)}</h2>'
+    if text:
+        out += f'<p>{_html_escape(text)}</p>'
+    out += f'<a href=\"{_html_escape(btn_url)}\" class=\"btn btn-primary\" style=\"padding: 16px 40px; font-size: 18px;\">{_html_escape(btn_text)}</a>'
+    out += '</div>'
+    return out
+
+
+
 def _read(path: str) -> str:
     with open(path, "r", encoding="utf-8") as f:
         return f.read()
@@ -22,6 +49,20 @@ def _utc_date() -> str:
 
 def _html_escape(s: str) -> str:
     return htmlmod.escape(s, quote=True)
+
+
+def _html_unescape(s: str) -> str:
+    return htmlmod.unescape(s or "")
+
+
+def _html_unescape_deep(s: str, rounds: int = 3) -> str:
+    out = s or ""
+    for _ in range(max(1, rounds)):
+        nxt = htmlmod.unescape(out)
+        if nxt == out:
+            break
+        out = nxt
+    return out
 
 
 def _slugify(s: str) -> str:
@@ -90,6 +131,7 @@ def _build_breadcrumbs(title: str) -> str:
 
 def _ensure_heading_ids(content_html: str) -> tuple[str, list[dict[str, str]]]:
     # Adds id attributes to h2/h3 and returns a toc model.
+    # Important: include headings that already have id="..." so TOC is never lost.
     toc: list[dict[str, str]] = []
 
     def repl(m: re.Match[str]) -> str:
@@ -97,10 +139,12 @@ def _ensure_heading_ids(content_html: str) -> tuple[str, list[dict[str, str]]]:
         attrs = m.group(2) or ""
         inner = m.group(3) or ""
         text = re.sub(r"<[^>]+>", "", inner).strip()
-        hid = _slugify(text)
-        if re.search(r"\bid=\"", attrs, flags=re.IGNORECASE):
+        id_match = re.search(r'\bid\s*=\s*"([^"]+)"', attrs, flags=re.IGNORECASE)
+        hid = (id_match.group(1).strip() if id_match else "") or _slugify(text)
+        if text and hid:
+            toc.append({"level": tag, "id": hid, "text": text})
+        if id_match:
             return m.group(0)
-        toc.append({"level": tag, "id": hid, "text": text})
         return f"<{tag}{attrs} id=\"{hid}\">{inner}</{tag}>"
 
     out = re.sub(
@@ -110,6 +154,25 @@ def _ensure_heading_ids(content_html: str) -> tuple[str, list[dict[str, str]]]:
         flags=re.IGNORECASE | re.DOTALL,
     )
     return out, toc
+
+
+def _collect_toc_from_existing_headings(content_html: str) -> list[dict[str, str]]:
+    toc: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for m in re.finditer(r"<(h2|h3)([^>]*)>(.*?)</\1>", content_html or "", flags=re.IGNORECASE | re.DOTALL):
+        tag = (m.group(1) or "").lower()
+        attrs = m.group(2) or ""
+        inner = m.group(3) or ""
+        text = re.sub(r"<[^>]+>", "", inner).strip()
+        if not text:
+            continue
+        id_match = re.search(r'\bid\s*=\s*"([^"]+)"', attrs, flags=re.IGNORECASE)
+        hid = (id_match.group(1).strip() if id_match else "") or _slugify(text)
+        if not hid or hid in seen:
+            continue
+        seen.add(hid)
+        toc.append({"level": tag, "id": hid, "text": text})
+    return toc
 
 
 def _render_toc(toc: list[dict[str, str]], title: str = "On this page") -> str:
@@ -205,6 +268,8 @@ def render_post_html(
     toc_title: str = "On this page",
 ) -> str:
     template_path = os.path.join(blog_dir, "template.html")
+    if not os.path.exists(template_path):
+        template_path = os.path.join(os.path.dirname(os.path.dirname(blog_dir)), "blog", "template.html")
     src = _read(template_path)
 
     hero_file = os.path.basename(hero_image)
@@ -266,9 +331,16 @@ def render_post_html(
         content_html = "".join(out_parts)
 
     toc_html = _render_toc(toc_model, toc_title)
+    if not toc_html:
+        # Safety net for legacy/edited HTML where headings already had ids.
+        fallback_toc = _collect_toc_from_existing_headings(content_html)
+        toc_html = _render_toc(fallback_toc, toc_title)
     sources_html = _render_sources(sources) if noindex else ""
 
-    url = f"https://myugc.studio/blog/{slug}.html"
+    origin = _site_origin().rstrip("/")
+    parent = os.path.basename(os.path.dirname(blog_dir))
+    locale_prefix = f"/{parent}" if parent in {"de", "es", "fr", "ru"} else ""
+    url = f"{origin}{locale_prefix}/blog/{slug}.html"
     date_iso = (updated_at or "").split("T", 1)[0] or _utc_date()
 
     if noindex:
@@ -300,8 +372,8 @@ def render_post_html(
                 "@context": "https://schema.org",
                 "@type": "BreadcrumbList",
                 "itemListElement": [
-                    {"@type": "ListItem", "position": 1, "name": "Home", "item": "https://myugc.studio/"},
-                    {"@type": "ListItem", "position": 2, "name": "Blog", "item": "https://myugc.studio/blog/"},
+                    {"@type": "ListItem", "position": 1, "name": "Home", "item": origin + locale_prefix + "/"},
+                    {"@type": "ListItem", "position": 2, "name": "Blog", "item": origin + locale_prefix + "/blog/"},
                     {"@type": "ListItem", "position": 3, "name": title, "item": url},
                 ],
             },
@@ -310,7 +382,7 @@ def render_post_html(
         + '</script>'
     )
 
-    img_url = f"https://myugc.studio/blog/{_html_escape(hero_file)}" if hero_file else ""
+    img_url = f"{origin}/blog/{_html_escape(hero_file)}" if hero_file else ""
     json_ld_post = (
         '<script type="application/ld+json">'
         + json.dumps(
@@ -323,8 +395,8 @@ def render_post_html(
                 "image": [img_url] if img_url else [],
                 "datePublished": date_iso,
                 "dateModified": date_iso,
-                "author": {"@type": "Organization", "name": "My UGC Studio"},
-                "publisher": {"@type": "Organization", "name": "My UGC Studio"},
+                "author": {"@type": "Organization", "name": _site_name()},
+                "publisher": {"@type": "Organization", "name": _site_name()},
             },
             ensure_ascii=False,
         )
@@ -361,6 +433,7 @@ def render_post_html(
         f"{_build_breadcrumbs(title)}{toc_html}{content_html}{sources_html}",
     )
     out = out.replace("{{IMAGE}}", image_placeholder)
+    out = out.replace("{{CTA}}", _cta_box_html())
 
     # Force SEO <title> without the template suffix.
     out = re.sub(r"<title>.*?</title>", f"<title>{_html_escape(meta_title)}</title>", out, flags=re.IGNORECASE | re.DOTALL)
@@ -419,6 +492,9 @@ def upsert_blog_index_card(
     elif href in src:
         return
 
+    title = _html_unescape_deep(title).strip()
+    category = _html_unescape_deep(category).strip()
+    description = _html_unescape_deep(description).strip()
     excerpt = description.strip()
     if len(excerpt) > 170:
         excerpt = excerpt[:167].rstrip() + "..."
