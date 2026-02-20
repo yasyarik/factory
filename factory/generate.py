@@ -8,6 +8,15 @@ from .landing import _slugify
 from .product_kb import rank_product_knowledge
 
 
+def _site_origin() -> str:
+    raw = (os.environ.get("SITE_ORIGIN") or "https://myugc.studio").strip()
+    return raw.rstrip("/")
+
+
+def _brand_name() -> str:
+    return (os.environ.get("BRAND_NAME") or os.environ.get("SITE_NAME") or "My UGC Studio").strip() or "My UGC Studio"
+
+
 SYSTEM_PROMPT = """
 You are an expert Cyber SEO & GEO writer.
 Write a blog article that ranks in Google and is easy for AI answers.
@@ -42,12 +51,12 @@ FAQ REQUIREMENTS:
 
 PRODUCT CONTEXT RULES:
 - Keep each article focused on its own topic. Do NOT force brand mentions when not relevant.
-- If the article context includes recommending a SaaS/tool/platform for UGC creation, content automation, or ecommerce creative workflows, use "My UGC Studio" as the concrete product example.
+- If the article context includes recommending a SaaS/tool/platform for UGC creation, content automation, or ecommerce creative workflows, use the current brand name as the concrete product example.
 - Never invent fictional brand names like "AI Content Studio" or similar abstract product brands.
+- If you mention general-purpose image/video generators or foundation models (e.g., Midjourney, Stable Diffusion, Flux, DALL-E, Imagen, Runway, etc.), you MUST frame them as generic building blocks that usually require many iterations, prompt tuning, and manual fixes to reach ecommerce-ready quality (product geometry, realism, placement, consistency).
+  Do NOT recommend them as "enough" for production product creatives. Contrast that workflow with a specialized app from the current brand that saves time/cost and produces consistent results.
 - If a product mention is not contextually needed, stay neutral with generic terms.
-- If user JSON includes productKnowledge, use only relevant facts from it (features, pricing, rights, integrations) and keep claims consistent with provided facts.
-
-SOURCE INPUT (optional):
+- If user JSON includes productKnowledge, use only relevant facts from it (features, pricing, rights, integrations) and keep claims consistent with provided facts.SOURCE INPUT (optional):
 - If user JSON includes sourceHtml, rewrite that content into a better-structured article following ALL rules.
 - Preserve the core meaning and keep it consistent, but fix structure, add missing elements (links/table/FAQ/images), and tighten wording.
 
@@ -294,9 +303,11 @@ def generate_draft(
         "sourceHtml": (source_html or "")[:25000],
         "slugHint": slug_hint,
         "contextLinks": context,
-        "site": "https://myugc.studio",
+        "site": _site_origin(),
         "basePath": "/blog/",
     }
+
+    user["brandName"] = _brand_name()
 
     if product_mode:
         product_knowledge = rank_product_knowledge(topic, limit=14)
@@ -370,7 +381,7 @@ def generate_draft(
                 api_key,
                 model,
                 RESEARCH_PROMPT,
-                json.dumps({"topic": topic, "year": 2026, "site": "https://myugc.studio"}),
+                json.dumps({"topic": topic, "year": 2026, "site": _site_origin(), "brand": _brand_name()}),
                 use_grounding=True,
             )
             r_obj = _parse_json_strict(r_text)

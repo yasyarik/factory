@@ -55,6 +55,13 @@ def _truncate_to(s: str, max_len: int) -> str:
         cut = cut[:sp]
     return cut.rstrip(" ,;:-")
 
+def _is_author_access_denied(err: Exception) -> bool:
+    msg = str(err or '')
+    if 'ugcPosts failed' not in msg and 'ACCESS_DENIED' not in msg and '403' not in msg:
+        return False
+    return ('/author' in msg) or ('fields [/author]' in msg)
+
+
 
 def linkedin_scopes(mode: str = 'member') -> str:
     # Keep scopes minimal to avoid app-permission issues.
@@ -517,6 +524,8 @@ def post_job_to_linkedin(
     else:
         author_urn = member_urn
 
+    fallback_to_member = (author_mode == 'org')
+
     text = build_linkedin_post(title=title, description=description, content_html=content_html, author_bio=author_bio, include_link=include_link, url=url)
     if len(text) > 3000:
         text = _truncate_to(text, 3000)
@@ -525,13 +534,27 @@ def post_job_to_linkedin(
         img_bytes = f.read()
 
     mime = _guess_mime_from_filename(hero_filename)
+    try:
+        asset, upload_url = linkedin_register_image_upload(access_token=access_token, owner_urn=author_urn)
+        linkedin_upload_image(upload_url=upload_url, image_bytes=img_bytes, mime=mime)
 
-    asset, upload_url = linkedin_register_image_upload(access_token=access_token, owner_urn=author_urn)
-    linkedin_upload_image(upload_url=upload_url, image_bytes=img_bytes, mime=mime)
-
-    api_response = linkedin_create_image_post(access_token=access_token, author_urn=author_urn, text=text, asset_urn=asset, title=title)
-    return {
-        "api_response": api_response,
-        "sent_text": text,
-        "author_urn": author_urn,
-    }
+        api_response = linkedin_create_image_post(access_token=access_token, author_urn=author_urn, text=text, asset_urn=asset, title=title)
+        return {
+            "api_response": api_response,
+            "sent_text": text,
+            "author_urn": author_urn,
+        }
+    except Exception as e:
+        # If posting-as-org is not permitted, LinkedIn returns ACCESS_DENIED for /author.
+        if fallback_to_member and _is_author_access_denied(e):
+            author_urn = member_urn
+            asset, upload_url = linkedin_register_image_upload(access_token=access_token, owner_urn=author_urn)
+            linkedin_upload_image(upload_url=upload_url, image_bytes=img_bytes, mime=mime)
+            api_response = linkedin_create_image_post(access_token=access_token, author_urn=author_urn, text=text, asset_urn=asset, title=title)
+            return {
+                'api_response': api_response,
+                'sent_text': text,
+                'author_urn': author_urn,
+                'fallback': 'member',
+            }
+        raise

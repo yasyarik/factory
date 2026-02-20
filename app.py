@@ -351,6 +351,22 @@ def _mark_stale_social_postings(max_age_min: int = 5) -> None:
         )
 
 
+def _mark_stale_generating_jobs(max_age_min: int = 45) -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_min)).replace(microsecond=0).isoformat()
+    now = utcnow_iso()
+    stale_msg = f"Stale GENERATING timeout after {max_age_min} minutes"
+
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET status='ERROR', error=?, updated_at=?
+            WHERE status='GENERATING' AND updated_at < ?
+            """,
+            (stale_msg, now, cutoff),
+        )
+
+
 # Lightweight .env loader (so PM2 does not need env wiring).
 # Lines: KEY=VALUE, supports comments (#) and quoted values.
 def _load_dotenv(dotenv_path: str) -> None:
@@ -673,8 +689,9 @@ def _startup() -> None:
         pass
 
     db_init(DB_PATH)
-    # Mark truly stale social postings only on startup (not during UI polling)
+    # Mark stale async states only on startup (not during UI polling)
     _mark_stale_social_postings(max_age_min=30)
+    _mark_stale_generating_jobs(max_age_min=45)
     _autopublish_start_scheduler()
 
 
@@ -691,6 +708,13 @@ def index(request: Request):
 
 @app.get("/api/jobs")
 def list_jobs():
+    # Keep UI responsive: clear stale async statuses on polling.
+    try:
+        _mark_stale_social_postings(max_age_min=12)
+        _mark_stale_generating_jobs(max_age_min=60)
+    except Exception:
+        pass
+
     with db_connect(DB_PATH) as conn:
         rows = conn.execute(
             """
@@ -2104,8 +2128,39 @@ def _ap_log_run(started_at: str, finished_at: str, trigger: str, job_id: str | N
         )
 
 
+def _ap_generate_oldest_new_to_ready(max_attempts: int = 5) -> str | None:
+    """Try to promote queued NEW jobs into READY by generating oldest first."""
+    with db_connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT id FROM jobs WHERE status='NEW' ORDER BY created_at ASC LIMIT ?",
+            (max_attempts,),
+        ).fetchall()
+
+    for r in rows:
+        job_id = str(r[0])
+        try:
+            gen_out = generate(job_id)
+            if isinstance(gen_out, dict) and gen_out.get('success') is False:
+                continue
+        except Exception:
+            continue
+
+        with db_connect(DB_PATH) as conn:
+            st = conn.execute('SELECT status FROM jobs WHERE id=?', (job_id,)).fetchone()
+        if st and str(st[0] or '').upper().strip() == 'READY':
+            return job_id
+
+    return None
+
+
 def _ap_autofill_from_topic_discovery() -> str | None:
-    """When autopublish queue is empty, optionally discover -> create -> generate 1 job."""
+    """When autopublish queue is empty, promote NEW first, then discover->create->generate."""
+    # 1) Prefer already queued NEW topics before discovering anything new.
+    existing = _ap_generate_oldest_new_to_ready(max_attempts=5)
+    if existing:
+        return existing
+
+    # 2) If nothing queued, run topic discovery settings and try again.
     try:
         td = _td_read_settings()
     except Exception:
@@ -2118,33 +2173,12 @@ def _ap_autofill_from_topic_discovery() -> str | None:
     if len(direction) < 3:
         return None
 
-    out = _run_topic_autodiscovery(trigger='autopublish')
     try:
-        queued = int(out.get('queuedCount') or 0) if isinstance(out, dict) else 0
-    except Exception:
-        queued = 0
-    if queued <= 0:
-        return None
-
-    with db_connect(DB_PATH) as conn:
-        r = conn.execute("SELECT id FROM jobs WHERE status='NEW' ORDER BY created_at ASC LIMIT 1").fetchone()
-    if not r:
-        return None
-
-    job_id = str(r[0])
-    try:
-        gen_out = generate(job_id)
-        if isinstance(gen_out, dict) and gen_out.get('success') is False:
-            return None
+        _run_topic_autodiscovery(trigger='autopublish')
     except Exception:
         return None
 
-    with db_connect(DB_PATH) as conn:
-        st = conn.execute('SELECT status FROM jobs WHERE id=?', (job_id,)).fetchone()
-    if not st or str(st[0] or '').upper().strip() != 'READY':
-        return None
-
-    return job_id
+    return _ap_generate_oldest_new_to_ready(max_attempts=8)
 
 
 def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:

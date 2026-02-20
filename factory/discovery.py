@@ -21,6 +21,16 @@ BAD_TOPIC_PHRASES = (
 )
 
 
+
+GENERIC_DIRECTION_TOKENS = {
+    "content", "guide", "best", "how", "what", "why", "with", "using", "tool", "tools",
+    "tips", "ideas", "strategy", "strategies", "workflow", "marketing", "article", "articles"
+}
+
+
+def _direction_anchor_tokens(direction: str) -> set[str]:
+    return {t for t in _tokens(direction) if len(t) >= 4 and t not in GENERIC_DIRECTION_TOKENS}
+
 def _norm_space(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip())
 
@@ -100,10 +110,14 @@ def _clean_candidate_topic(raw_topic: str, direction: str) -> str | None:
     if len(re.findall(r"[A-Za-z]", t)) < 10:
         return None
 
-    # Ensure topic still relates to direction at least weakly.
+    # Ensure topic still relates to direction.
     dt = _tokens(direction)
     tt = _tokens(t)
     if dt and not (dt & tt):
+        return None
+
+    anchors = _direction_anchor_tokens(direction)
+    if anchors and not (anchors & tt):
         return None
 
     return t
@@ -324,7 +338,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
         }
 
     dir_tokens = _tokens(direction)
-    anchor_tokens = {t for t in dir_tokens if len(t) >= 6}
+    anchor_tokens = _direction_anchor_tokens(direction)
 
     agg: dict[str, dict[str, Any]] = {}
     for item in raw:

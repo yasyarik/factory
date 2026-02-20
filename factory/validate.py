@@ -90,7 +90,7 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
         problems.append("missing faq array (need >= 5 Q/A)")
 
     for tag in ("h2", "h3"):
-        blocks = re.split(rf"(<{tag}[^>]*>.*?</{tag}>)", html, flags=re.IGNORECASE | re.DOTALL)
+        blocks = re.split(r"(<" + tag + r"[^>]*>.*?</" + tag + r">)", html, flags=re.IGNORECASE | re.DOTALL)
         for i in range(1, len(blocks), 2):
             after = blocks[i + 1] if i + 1 < len(blocks) else ""
             m = re.search(r"<p[^>]*>\s*(.*?)</p>", after, flags=re.IGNORECASE | re.DOTALL)
