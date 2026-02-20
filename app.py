@@ -6,6 +6,7 @@ import sqlite3
 import secrets
 import re
 import threading
+import subprocess
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -65,7 +66,7 @@ ENV_PATH = os.path.join(APP_DIR, ".env")
 
 LANDING_DIR = os.environ.get("LANDING_DIR", "/var/www/landing")
 BLOG_DIR = os.path.join(LANDING_DIR, "blog")
-SITEMAP_PATH = os.path.join(LANDING_DIR, "sitemap.xml")
+SITEMAP_PATH = os.path.join(LANDING_DIR, "sitemap-en.xml")
 LOCALES = ("ru", "es", "de", "fr")
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
@@ -75,6 +76,16 @@ app = FastAPI()
 _AUTOPUBLISH_LOCK = threading.Lock()
 _TOPIC_DISCOVERY_LOCK = threading.Lock()
 _AUTOPUBLISH_THREAD = None
+
+
+
+SITE_ENV_KEYS = {
+    "SITE_CTA_ENABLED",
+    "SITE_CTA_TITLE",
+    "SITE_CTA_TEXT",
+    "SITE_CTA_BUTTON_TEXT",
+    "SITE_CTA_BUTTON_URL",
+}
 
 
 SOCIAL_ENV_KEYS = {
@@ -104,6 +115,80 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _site_origin() -> str:
+    raw = (os.environ.get("SITE_ORIGIN") or "https://myugc.studio").strip()
+    if not raw:
+        raw = "https://myugc.studio"
+    return raw.rstrip("/")
+
+def _gsc_site_url() -> str:
+    raw = (os.environ.get("GSC_SITE_URL") or "").strip()
+    if raw:
+        if raw.startswith("sc-domain:"):
+            return raw
+        return raw if raw.endswith("/") else (raw + "/")
+    origin = _site_origin().rstrip("/")
+    return origin + "/"
+
+
+def _submit_sitemaps_to_search_console(sitemaps: list[str]) -> dict[str, Any]:
+    creds = (os.environ.get("GSC_CREDENTIALS_FILE") or os.path.join(APP_DIR, "keys", "gsc-service-account.json")).strip()
+    script = os.path.join(APP_DIR, "scripts", "gsc_submit.js")
+    site_url = _gsc_site_url()
+
+    if not os.path.exists(script):
+        return {"success": False, "error": f"gsc submit script not found: {script}"}
+    if not os.path.exists(creds):
+        return {"success": False, "error": f"gsc credentials not found: {creds}"}
+
+    payload = {
+        "credentials": creds,
+        "siteUrl": site_url,
+        "sitemaps": [s for s in (sitemaps or []) if s],
+    }
+
+    try:
+        cp = subprocess.run(
+            ["node", script],
+            input=json.dumps(payload),
+            text=True,
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    stdout = (cp.stdout or "").strip()
+    stderr = (cp.stderr or "").strip()
+    data = None
+    if stdout:
+        try:
+            data = json.loads(stdout)
+        except Exception:
+            data = {"raw": stdout}
+
+    ok = (cp.returncode == 0) and isinstance(data, dict) and bool(data.get("success"))
+    if ok:
+        return {"success": True, "result": data}
+
+    return {
+        "success": False,
+        "error": (data.get("error") if isinstance(data, dict) else None) or stderr or stdout or f"exit {cp.returncode}",
+        "result": data,
+    }
+
+
+
+def _ensure_sitemap(path: str) -> None:
+    if not path or os.path.exists(path):
+        return
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write('<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n')
+        f.write('<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\"></urlset>\n')
+
+
 def _locale_blog_dir(locale: str) -> str:
     return os.path.join(LANDING_DIR, locale, "blog")
 
@@ -113,13 +198,14 @@ def _locale_sitemap_path(locale: str) -> str:
 
 
 def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
-    canonical = f"https://myugc.studio/{locale}/blog/{slug}.html" if locale != "en" else f"https://myugc.studio/blog/{slug}.html"
+    origin = _site_origin()
+    canonical = f"{origin}/{locale}/blog/{slug}.html" if locale != "en" else f"{origin}/blog/{slug}.html"
     alts = {
-        "en": f"https://myugc.studio/blog/{slug}.html",
-        "ru": f"https://myugc.studio/ru/blog/{slug}.html",
-        "es": f"https://myugc.studio/es/blog/{slug}.html",
-        "de": f"https://myugc.studio/de/blog/{slug}.html",
-        "fr": f"https://myugc.studio/fr/blog/{slug}.html",
+        "en": f"{origin}/blog/{slug}.html",
+        "ru": f"{origin}/ru/blog/{slug}.html",
+        "es": f"{origin}/es/blog/{slug}.html",
+        "de": f"{origin}/de/blog/{slug}.html",
+        "fr": f"{origin}/fr/blog/{slug}.html",
     }
     block = (
         f'<link href="{canonical}" rel="canonical"/>'
@@ -128,6 +214,12 @@ def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
     )
     html = re.sub(r'(?is)<link\s+rel="canonical"[^>]*>', '', html)
     html = re.sub(r'(?is)<link\s+href="[^"]+"\s+hreflang="[^"]+"\s+rel="alternate"\s*/?>', '', html)
+    html = re.sub(
+        r"(?is)<meta\s+[^>]*property=[\"\']og:url[\"\'][^>]*>",
+        f'<meta content="{canonical}" property="og:url"/>',
+        html,
+        count=1,
+    )
     if "</head>" in html:
         html = html.replace("</head>", block + "</head>", 1)
     return html
@@ -377,7 +469,7 @@ def _social_settings_snapshot() -> dict[str, Any]:
     out: dict[str, Any] = {}
     out["LINKEDIN_CLIENT_ID"] = pick("LINKEDIN_CLIENT_ID", "LI_CLIENT_ID")
     out["LINKEDIN_CLIENT_SECRET"] = pick("LINKEDIN_CLIENT_SECRET", "LI_CLIENT_SECRET")
-    out["LINKEDIN_REDIRECT_URI"] = pick("LINKEDIN_REDIRECT_URI") or "https://myugc.studio/factory/linkedin/callback"
+    out["LINKEDIN_REDIRECT_URI"] = pick("LINKEDIN_REDIRECT_URI") or (_site_origin() + "/factory/linkedin/callback")
     out["LINKEDIN_PERSON_URN"] = pick("LINKEDIN_PERSON_URN", "LI_PERSON_URN")
     out["LINKEDIN_ORG_URN"] = pick("LINKEDIN_ORG_URN")
     out["LINKEDIN_AUTHOR_BIO"] = pick("LINKEDIN_AUTHOR_BIO", "LI_AUTHOR_BIO")
@@ -416,10 +508,173 @@ def _sanitize_source_html(html: str | None) -> str | None:
     return out.strip() or None
 
 
+def _strip_html_text(s: str) -> str:
+    return re.sub(r"<[^>]+>", " ", s or "").strip()
+
+
+def _ensure_min_faq(draft: dict[str, Any], topic: str | None = None, min_items: int = 5) -> dict[str, Any]:
+    if not isinstance(draft, dict):
+        return draft
+
+    faq = draft.get("faq")
+    if not isinstance(faq, list):
+        faq = []
+
+    cleaned: list[dict[str, str]] = []
+    for it in faq:
+        if not isinstance(it, dict):
+            continue
+        q = str(it.get("question") or "").strip()
+        a = str(it.get("answer") or "").strip()
+        if q and a:
+            cleaned.append({"question": q, "answer": a})
+
+    if len(cleaned) >= min_items:
+        draft["faq"] = cleaned
+        return draft
+
+    html = str(draft.get("contentHtml") or "")
+    title = str(draft.get("title") or topic or "this topic").strip()
+
+    q_pool: list[str] = []
+    for tag in ("h2", "h3"):
+        for m in re.findall(rf"<{tag}[^>]*>(.*?)</{tag}>", html, flags=re.IGNORECASE | re.DOTALL):
+            t = _strip_html_text(m)
+            t = re.sub(r"\s+", " ", t).strip()
+            if not t:
+                continue
+            if not t.endswith("?"):
+                t = t.rstrip(".:") + "?"
+            if len(t) < 10:
+                continue
+            if t not in q_pool:
+                q_pool.append(t)
+
+    defaults = [
+        f"What is the quickest way to implement {title}?",
+        f"Which mistakes should you avoid when applying {title}?",
+        f"How much does it cost to run {title} effectively?",
+        f"How long does it take to see results from {title}?",
+        f"Which metrics should you track for {title}?",
+        f"Can beginners execute {title} without a big team?",
+        f"What tools are required to scale {title}?",
+    ]
+
+    for q in defaults:
+        if q not in q_pool:
+            q_pool.append(q)
+
+    text = re.sub(r"\s+", " ", _strip_html_text(html))
+    short = text[:220].strip()
+    if not short:
+        short = "Use a structured plan, prioritize high-impact actions first, and iterate with measurable checkpoints."
+
+    used = {x["question"] for x in cleaned}
+    for q in q_pool:
+        if len(cleaned) >= min_items:
+            break
+        if q in used:
+            continue
+        a = f"Short answer: {short} Focus on practical execution, measurable KPIs, and consistent iteration in 2026."
+        cleaned.append({"question": q, "answer": a})
+        used.add(q)
+
+    draft["faq"] = cleaned
+    return draft
+
+
+def _extract_first_sentence(text: str, max_chars: int = 220) -> str:
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    if not t:
+        return "Short answer."
+    m = re.search(r"^(.+?[\.!?])(?:\s|$)", t)
+    if m:
+        ans = m.group(1).strip()
+    else:
+        ans = t[:max_chars].strip()
+    if len(ans) > max_chars:
+        ans = ans[:max_chars].rstrip()
+    return ans or "Short answer."
+
+
+def _ensure_strong_lead_paragraph(html_text: str) -> tuple[str, int]:
+    if not html_text:
+        return html_text, 0
+
+    changed = 0
+    m_h2 = re.search(r"<h2", html_text, flags=re.IGNORECASE)
+    head = html_text if not m_h2 else html_text[: m_h2.start()]
+    tail = "" if not m_h2 else html_text[m_h2.start():]
+
+    m_p = re.search(r"<p([^>]*)>\s*(.*?)</p>", head, flags=re.IGNORECASE | re.DOTALL)
+    if m_p:
+        inner = (m_p.group(2) or "").lstrip()
+        if not re.match(r"<strong>\s*.+?</strong>", inner, flags=re.IGNORECASE | re.DOTALL):
+            plain = _strip_html_text(inner)
+            answer = html.escape(_extract_first_sentence(plain))
+            repl = f"<p{m_p.group(1)}><strong>{answer}</strong> " + inner + "</p>"
+            head = head[:m_p.start()] + repl + head[m_p.end():]
+            changed += 1
+
+    return head + tail, changed
+
+
+def _autofix_answer_first(html_text: str) -> tuple[str, int]:
+    if not html_text:
+        return html_text, 0
+
+    total = 0
+    html_text, c = _ensure_strong_lead_paragraph(html_text)
+    total += c
+
+    parts = re.split(r"(<h[23][^>]*>.*?</h[23]>)", html_text, flags=re.IGNORECASE | re.DOTALL)
+    if len(parts) < 3:
+        return html_text, total
+
+    for i in range(1, len(parts), 2):
+        heading_html = parts[i]
+        after = parts[i + 1] if (i + 1) < len(parts) else ""
+
+        m_p = re.search(r"<p([^>]*)>\s*(.*?)</p>", after, flags=re.IGNORECASE | re.DOTALL)
+        if m_p:
+            inner = (m_p.group(2) or "").lstrip()
+            if not re.match(r"<strong>\s*.+?</strong>", inner, flags=re.IGNORECASE | re.DOTALL):
+                plain = _strip_html_text(inner)
+                answer = html.escape(_extract_first_sentence(plain))
+                repl = f"<p{m_p.group(1)}><strong>{answer}</strong> " + inner + "</p>"
+                after = after[:m_p.start()] + repl + after[m_p.end():]
+                parts[i + 1] = after
+                total += 1
+            continue
+
+        htxt = _strip_html_text(heading_html).strip()
+        if htxt.endswith("?"):
+            htxt = htxt[:-1].strip()
+        seed = _extract_first_sentence(htxt or "Short answer")
+        lead = f"<p><strong>{html.escape(seed)}.</strong></p>"
+        parts[i + 1] = lead + after
+        total += 1
+
+    return "".join(parts), total
+
+
 @app.on_event("startup")
 def _startup() -> None:
-    _load_dotenv(os.path.join(APP_DIR, '.env'))
+    _load_dotenv(os.path.join(APP_DIR, ".env"))
+
+    # Recompute paths after .env load (LANDING_DIR may come from .env).
+    global LANDING_DIR, BLOG_DIR, SITEMAP_PATH
+    LANDING_DIR = os.environ.get("LANDING_DIR", LANDING_DIR)
+    BLOG_DIR = os.path.join(LANDING_DIR, "blog")
+    SITEMAP_PATH = os.path.join(LANDING_DIR, "sitemap-en.xml")
+    try:
+        os.makedirs(BLOG_DIR, exist_ok=True)
+    except Exception:
+        pass
+
     db_init(DB_PATH)
+    # Mark truly stale social postings only on startup (not during UI polling)
+    _mark_stale_social_postings(max_age_min=30)
     _autopublish_start_scheduler()
 
 
@@ -436,7 +691,6 @@ def index(request: Request):
 
 @app.get("/api/jobs")
 def list_jobs():
-    _mark_stale_social_postings(max_age_min=5)
     with db_connect(DB_PATH) as conn:
         rows = conn.execute(
             """
@@ -659,6 +913,9 @@ def _topic_is_queueable(topic: str) -> bool:
         "later addressed",
         "reversed course",
         "this isn't a",
+        "nano banana",
+        "banano",
+        "claude best",
     )
     if any(b in lo for b in banned):
         return False
@@ -669,6 +926,34 @@ def _topic_is_queueable(topic: str) -> bool:
     return True
 
 
+
+
+def _synthetic_direction_topics(direction: str, count: int = 6) -> list[str]:
+    base = re.sub(r"\s+", " ", (direction or "").strip())
+    if not base:
+        return []
+    b = base[0].upper() + base[1:]
+    variants = [
+        f"{b}: practical workflow for Shopify stores in 2026",
+        f"How to scale {b} with AI without wasting ad budget in 2026?",
+        f"{b}: best prompts and QA checklist for high-converting creatives",
+        f"{b}: comparison of manual vs automated pipeline for ecommerce teams",
+        f"How to reduce CAC using {b} and UGC-style assets in 2026?",
+        f"{b}: 30-day content plan for product pages and paid ads",
+        f"{b}: common mistakes and how to fix them fast",
+        f"Can {b} increase conversion rate for dropshipping stores?",
+    ]
+    out=[]
+    seen=set()
+    for t in variants:
+        k=_topic_key(t)
+        if not k or k in seen:
+            continue
+        seen.add(k)
+        out.append(t)
+        if len(out)>=max(1,int(count or 1)):
+            break
+    return out
 def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _TOPIC_DISCOVERY_LOCK.acquire(blocking=False):
         return {"success": False, "status": "BUSY", "message": "topic discovery already running"}
@@ -694,7 +979,7 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
         data = discover_topics(direction=direction, limit=per_run_limit, category_hint=category_hint)
         items = list(data.get("items") or [])
 
-        # Filter by score and keep best N.
+        # Filter by score.
         scored = []
         for it in items:
             try:
@@ -704,7 +989,6 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
             if sc >= min_score and (it.get("topic") or "").strip():
                 scored.append((sc, it))
         scored.sort(key=lambda x: x[0], reverse=True)
-        picked = [it for _, it in scored[:top_n]]
 
         with db_connect(DB_PATH) as conn:
             rows = conn.execute("SELECT topic FROM jobs").fetchall()
@@ -712,21 +996,30 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
 
         queued = 0
         queued_topics: list[str] = []
-        for it in picked:
+        skipped_duplicates = 0
+        skipped_unqueueable = 0
+
+        # Deduplicate/validate first, then take top N queue additions.
+        for _, it in scored:
+            if queued >= top_n:
+                break
+
             topic = (it.get("topic") or "").strip()
             if not topic:
                 continue
             if not _topic_is_queueable(topic):
+                skipped_unqueueable += 1
                 continue
             tk = _topic_key(topic)
             if not tk or tk in existing_topic_keys:
+                skipped_duplicates += 1
                 continue
             existing_topic_keys.add(tk)
 
             category = (it.get("category") or category_hint or "").strip() or None
             slug = (it.get("topic") or "").strip().lower()
-            slug = re.sub(r"[^a-z0-9\\s-]", "", slug)
-            slug = re.sub(r"\\s+", "-", slug).strip("-")
+            slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+            slug = re.sub(r"\s+", "-", slug).strip("-")
             slug = slug[:120] if slug else None
             now = utcnow_iso()
             job_id = secrets.token_hex(12)
@@ -743,6 +1036,40 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
             queued += 1
             queued_topics.append(topic)
 
+        # If everything from external signals was duplicate/unqueueable,
+        # seed queue with safe synthetic variants from direction.
+        synthetic_added = 0
+        if queued < top_n:
+            for topic in _synthetic_direction_topics(direction, count=(top_n * 2)):
+                if queued >= top_n:
+                    break
+                if not _topic_is_queueable(topic):
+                    continue
+                tk = _topic_key(topic)
+                if not tk or tk in existing_topic_keys:
+                    continue
+                existing_topic_keys.add(tk)
+
+                category = (category_hint or "").strip() or None
+                slug = topic.lower()
+                slug = re.sub(r"[^a-z0-9\s-]", "", slug)
+                slug = re.sub(r"\s+", "-", slug).strip("-")
+                slug = slug[:120] if slug else None
+                now = utcnow_iso()
+                job_id = secrets.token_hex(12)
+                with db_connect(DB_PATH) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO jobs (id, topic, slug, status, category, visibility, product_mode, created_at, updated_at)
+                        VALUES (?, ?, ?, 'NEW', ?, 'public', 0, ?, ?)
+                        """,
+                        (job_id, topic, slug, category, now, now),
+                    )
+                log_event(DB_PATH, job_id, "NEW", "Job created by topic autodiscovery (synthetic fallback)")
+                queued += 1
+                synthetic_added += 1
+                queued_topics.append(topic)
+
         result = {
             "success": True,
             "status": "DONE",
@@ -751,6 +1078,9 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
             "eligibleCount": len(scored),
             "queuedCount": queued,
             "queuedTopics": queued_topics,
+            "skippedDuplicates": skipped_duplicates,
+            "skippedUnqueueable": skipped_unqueueable,
+            "syntheticAdded": synthetic_added,
         }
         _td_log_run(started, utcnow_iso(), trigger, direction, "DONE", len(items), queued, result)
         return result
@@ -1015,6 +1345,32 @@ def generate(job_id: str):
         if draft["description"] != before_desc:
             log_event(DB_PATH, job_id, "INFO", f"Auto-fit meta description length: {len(before_desc)} -> {len(draft['description'])}")
 
+        # Hard site isolation: never keep myugc absolute links in non-myugc tenants.
+        try:
+            origin = _site_origin().rstrip("/")
+            if origin:
+                if isinstance(draft.get("contentHtml"), str):
+                    draft["contentHtml"] = re.sub(r"https?://myugc\.studio", origin, draft.get("contentHtml") or "", flags=re.IGNORECASE)
+                if isinstance(draft.get("sources"), list):
+                    fixed_sources = []
+                    for it in draft.get("sources"):
+                        if isinstance(it, dict):
+                            u = str(it.get("url") or "")
+                            if u:
+                                it["url"] = re.sub(r"https?://myugc\.studio", origin, u, flags=re.IGNORECASE)
+                        fixed_sources.append(it)
+                    draft["sources"] = fixed_sources
+        except Exception:
+            pass
+
+        draft = _ensure_min_faq(draft, topic=topic, min_items=5)
+        try:
+            fixed_html, fixed_count = _autofix_answer_first(str(draft.get("contentHtml") or ""))
+            if fixed_count > 0:
+                draft["contentHtml"] = fixed_html
+                log_event(DB_PATH, job_id, "INFO", f"Auto-fixed answer-first blocks: {fixed_count}")
+        except Exception as _af_err:
+            log_event(DB_PATH, job_id, "WARN", f"answer-first auto-fix skipped: {_af_err}")
         problems = validate_draft(draft)
         if not problems:
             break
@@ -1207,7 +1563,7 @@ def publish(job_id: str):
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    url = f"https://myugc.studio/blog/{slug}.html"
+    url = f"{_site_origin()}/blog/{slug}.html"
 
     # Update blog index and sitemap according to visibility.
     if noindex:
@@ -1224,7 +1580,7 @@ def publish(job_id: str):
         )
         upsert_sitemap_url(SITEMAP_PATH, url=url)
 
-    paths = [os.path.join("blog", f"{slug}.html"), os.path.join("blog", "index.html"), "sitemap.xml"] + (image_paths or [])
+    paths = [os.path.join("blog", f"{slug}.html"), os.path.join("blog", "index.html"), "sitemap-en.xml"] + (image_paths or [])
 
     # Publish localized versions (ru/es/de/fr) in the same publish action.
     text_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -1241,9 +1597,10 @@ def publish(job_id: str):
         "fr": "Sur cette page",
     }
     for loc in LOCALES:
+        _ensure_sitemap(_locale_sitemap_path(loc))
         loc_blog_dir = _locale_blog_dir(loc)
         loc_sitemap = _locale_sitemap_path(loc)
-        loc_url = f"https://myugc.studio/{loc}/blog/{slug}.html"
+        loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
         loc_out_rel = os.path.join(loc, "blog", f"{slug}.html")
         loc_idx_rel = os.path.join(loc, "blog", "index.html")
         loc_title = title or ""
@@ -1341,6 +1698,24 @@ def publish(job_id: str):
         )
 
     log_event(DB_PATH, job_id, "PUBLISHED", f"Published: {url}")
+
+    try:
+        origin = _site_origin().rstrip("/")
+        sitemap_urls = [
+            f"{origin}/sitemap_index.xml",
+            f"{origin}/sitemap-ru.xml",
+            f"{origin}/sitemap-es.xml",
+            f"{origin}/sitemap-de.xml",
+            f"{origin}/sitemap-fr.xml",
+        ]
+        gsc = _submit_sitemaps_to_search_console(sitemap_urls)
+        if gsc.get("success"):
+            log_event(DB_PATH, job_id, "INFO", "Search Console sitemap submit: OK")
+        else:
+            log_event(DB_PATH, job_id, "WARN", f"Search Console sitemap submit failed: {gsc.get('error')}")
+    except Exception as e:
+        log_event(DB_PATH, job_id, "WARN", f"Search Console sitemap submit error: {e}")
+
     return {"success": True, "url": url}
 
 
@@ -1499,9 +1874,9 @@ def unpublish(job_id: str):
 
     out_rel = os.path.join("blog", f"{slug}.html")
     out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
-    url = f"https://myugc.studio/blog/{slug}.html"
+    url = f"{_site_origin()}/blog/{slug}.html"
     remove_paths = [out_rel]
-    add_paths = [os.path.join("blog", "index.html"), "sitemap.xml"]
+    add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
 
     if os.path.exists(out_abs):
         os.remove(out_abs)
@@ -1513,7 +1888,7 @@ def unpublish(job_id: str):
         loc_blog_dir = _locale_blog_dir(loc)
         loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
         loc_rel = os.path.join(loc, "blog", f"{slug}.html")
-        loc_url = f"https://myugc.studio/{loc}/blog/{slug}.html"
+        loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
         if os.path.exists(loc_abs):
             os.remove(loc_abs)
         remove_blog_index_card(
@@ -1561,7 +1936,7 @@ def delete_job(job_id: str):
     if slug:
         out_rel = os.path.join("blog", f"{slug}.html")
         out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
-        url = f"https://myugc.studio/blog/{slug}.html"
+        url = f"{_site_origin()}/blog/{slug}.html"
 
         if os.path.exists(out_abs):
             os.remove(out_abs)
@@ -1574,7 +1949,7 @@ def delete_job(job_id: str):
             loc_blog_dir = _locale_blog_dir(loc)
             loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
             loc_rel = os.path.join(loc, "blog", f"{slug}.html")
-            loc_url = f"https://myugc.studio/{loc}/blog/{slug}.html"
+            loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
 
             if os.path.exists(loc_abs):
                 os.remove(loc_abs)
@@ -1589,7 +1964,7 @@ def delete_job(job_id: str):
             remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
 
     if removed_paths:
-        add_paths = [os.path.join("blog", "index.html"), "sitemap.xml"]
+        add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
         for loc in LOCALES:
             add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
         git_commit_push_with_remove(
@@ -1729,6 +2104,49 @@ def _ap_log_run(started_at: str, finished_at: str, trigger: str, job_id: str | N
         )
 
 
+def _ap_autofill_from_topic_discovery() -> str | None:
+    """When autopublish queue is empty, optionally discover -> create -> generate 1 job."""
+    try:
+        td = _td_read_settings()
+    except Exception:
+        return None
+
+    if not td.get('enabled'):
+        return None
+
+    direction = str(td.get('direction') or '').strip()
+    if len(direction) < 3:
+        return None
+
+    out = _run_topic_autodiscovery(trigger='autopublish')
+    try:
+        queued = int(out.get('queuedCount') or 0) if isinstance(out, dict) else 0
+    except Exception:
+        queued = 0
+    if queued <= 0:
+        return None
+
+    with db_connect(DB_PATH) as conn:
+        r = conn.execute("SELECT id FROM jobs WHERE status='NEW' ORDER BY created_at ASC LIMIT 1").fetchone()
+    if not r:
+        return None
+
+    job_id = str(r[0])
+    try:
+        gen_out = generate(job_id)
+        if isinstance(gen_out, dict) and gen_out.get('success') is False:
+            return None
+    except Exception:
+        return None
+
+    with db_connect(DB_PATH) as conn:
+        st = conn.execute('SELECT status FROM jobs WHERE id=?', (job_id,)).fetchone()
+    if not st or str(st[0] or '').upper().strip() != 'READY':
+        return None
+
+    return job_id
+
+
 def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
     if not _AUTOPUBLISH_LOCK.acquire(blocking=False):
         if trigger == "schedule":
@@ -1776,6 +2194,33 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
             if has_unposted_channel:
                 selected = (jid, slug, (published_url or "").strip())
                 break
+
+        if not selected:
+            # Try to fill the queue automatically (topic autodiscovery -> generate 1 draft)
+            # so scheduled slots can publish something when possible.
+            filled_id = _ap_autofill_from_topic_discovery()
+            if filled_id:
+                sql = (
+                    "SELECT id, slug, published_url, "
+                    "COALESCE(linkedin_status, ''), "
+                    "COALESCE(telegram_status, ''), "
+                    "COALESCE(twitter_status, '') "
+                    "FROM jobs WHERE status='READY' ORDER BY created_at ASC LIMIT 300"
+                )
+                with db_connect(DB_PATH) as conn:
+                    rows = conn.execute(sql).fetchall()
+
+                for r in rows:
+                    jid, slug, published_url, li_st, tg_st, tw_st = r
+                    st_map = {
+                        'linkedin': (li_st or '').upper().strip(),
+                        'telegram': (tg_st or '').upper().strip(),
+                        'twitter': (tw_st or '').upper().strip(),
+                    }
+                    has_unposted_channel = any(st_map.get(ch, '') != 'POSTED' for ch in channels)
+                    if has_unposted_channel:
+                        selected = (jid, slug, (published_url or '').strip())
+                        break
 
         if not selected:
             result = {"success": True, "status": "NOOP", "message": "no eligible READY jobs"}
@@ -2037,6 +2482,8 @@ async def settings_social_put(request: Request):
                 raise HTTPException(status_code=400, detail=str(e))
         if val:
             updates[key] = val
+        else:
+            clears.add(key)
 
     # Aliases kept in sync for compatibility with older env naming.
     if "LINKEDIN_CLIENT_ID" in updates:
@@ -2122,9 +2569,10 @@ def linkedin_connect(request: Request):
     if not client_id or not client_secret:
         raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET in .env")
 
-    mode = (request.query_params.get('as') or 'member').strip().lower()
+    org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip()
+    mode = (request.query_params.get('as') or '').strip().lower()
     if mode not in ('member', 'org'):
-        mode = 'member'
+        mode = 'org' if org_env else 'member'
 
     state = secrets.token_urlsafe(24)
     db_create_state(DB_PATH, provider="linkedin", state=state)
@@ -2192,11 +2640,6 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not client_id or not client_secret:
         raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET")
 
-    mode = (payload.get("as") or "").strip().lower()
-    if mode not in ("member", "org"):
-        mode = ""
-
-
     include_link = bool(payload.get("includeLink"))
 
     auth = db_get_linkedin(DB_PATH) or {}
@@ -2205,13 +2648,14 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
         raise HTTPException(status_code=400, detail="LinkedIn not connected")
 
     org_env = (os.environ.get("LINKEDIN_ORG_URN") or "").strip() or None
-    org_urn = (payload.get("orgUrn") or "").strip() or org_env or (auth.get("org_urn") or "").strip() or None
-    # Default to member posting. Organization is used only when explicitly requested.
-    # Having LINKEDIN_ORG_URN configured should not change default behavior.
-    if mode == "org":
-        if not org_urn:
-            raise HTTPException(status_code=400, detail="Missing LinkedIn org URN")
-    else:
+    org_urn = org_env or (auth.get("org_urn") or "").strip() or None
+
+    # Posting mode comes from global settings: if org URN configured -> org, else member.
+    # Keep payload["as"] only for backward compatibility with older UI clients.
+    mode = (payload.get("as") or "").strip().lower()
+    if mode not in ("member", "org"):
+        mode = "org" if org_urn else "member"
+    if mode == "org" and not org_urn:
         mode = "member"
 
     with db_connect(DB_PATH) as conn:
@@ -2232,12 +2676,48 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
         raise HTTPException(status_code=400, detail="Missing slug")
 
     # We post a link to the live blog page.
-    url = (published_url or f"https://myugc.studio/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
 
-    hero_filename = os.path.basename(hero_image or "")
+
+    # Use exactly the same image as in article HTML (first local <img src>). No social image generation.
+    hero_filename = ""
+    if draft_html:
+        m_first_img = re.search(r"(?is)<img[^>]+src=[\"']([^\"']+)[\"']", draft_html)
+        if m_first_img:
+            src = (m_first_img.group(1) or "").strip()
+            # Only local blog files; ignore absolute URLs/data URIs
+            if src and not src.startswith(("http://", "https://", "data:")):
+                src = src.split("?", 1)[0].split("#", 1)[0]
+                hero_filename = os.path.basename(src)
+
+    # Fallback to known generated local files if first image is absent/invalid.
+    candidates = []
+    if hero_filename:
+        candidates.append(hero_filename)
+    candidates.extend([
+        f"{slug}-img-1.png",
+        f"{slug}-img-1.jpg",
+        f"{slug}-img-1.jpeg",
+        f"{slug}-img-2.png",
+        f"{slug}-img-3.png",
+    ])
+    hero_fallback = os.path.basename(hero_image or "")
+    if hero_fallback:
+        candidates.append(hero_fallback)
+
+    chosen = None
+    for name in candidates:
+        if not name:
+            continue
+        abs_path = os.path.join(BLOG_DIR, name)
+        if os.path.exists(abs_path):
+            chosen = name
+            break
+
+    hero_filename = chosen or ""
     hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename else ""
     if not hero_filename or not os.path.exists(hero_abs):
-        raise HTTPException(status_code=400, detail="Hero image file not found in /var/www/landing/blog. Publish the article first so the hero is generated.")
+        raise HTTPException(status_code=400, detail="Article image file not found in blog directory. Publish/generate article first.")
 
     author_bio = (os.environ.get("LINKEDIN_AUTHOR_BIO") or os.environ.get("LI_AUTHOR_BIO") or "").strip()
     if not author_bio:
@@ -2340,12 +2820,33 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
 
-    url = (published_url or f"https://myugc.studio/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+
+    # Reuse already generated article images only (no social re-generation).
+    # Prefer square inline image from article; fallback to hero if needed.
+    candidates = [
+        f"{slug}-img-1.png",
+        f"{slug}-img-1.jpg",
+        f"{slug}-img-1.jpeg",
+        f"{slug}-img-2.png",
+        f"{slug}-img-3.png",
+    ]
     hero_filename = os.path.basename(hero_image or "")
-    hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename else ""
-    if not hero_filename or not os.path.exists(hero_abs):
-        hero_abs = None
-    hero_public_url = f"https://myugc.studio/blog/{hero_filename}" if hero_filename else None
+    if hero_filename:
+        candidates.append(hero_filename)
+
+    chosen = None
+    for name in candidates:
+        if not name:
+            continue
+        abs_path = os.path.join(BLOG_DIR, name)
+        if os.path.exists(abs_path):
+            chosen = name
+            break
+
+    hero_filename = chosen or (hero_filename or "")
+    hero_abs = os.path.join(BLOG_DIR, hero_filename) if hero_filename and os.path.exists(os.path.join(BLOG_DIR, hero_filename)) else None
+    hero_public_url = f"{_site_origin()}/blog/{hero_filename}" if hero_filename else None
 
     with db_connect(DB_PATH) as conn:
         conn.execute(
@@ -2430,7 +2931,7 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
 
-    url = (published_url or f"https://myugc.studio/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
 
     with db_connect(DB_PATH) as conn:
         conn.execute(
@@ -2479,3 +2980,35 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
 
     threading.Thread(target=_worker, daemon=True).start()
     return {"success": True, "status": "POSTING"}
+
+
+@app.get("/api/settings/site")
+def settings_site_get():
+    values = _env_file_values(ENV_PATH)
+
+    def pick(key: str) -> str:
+        return (values.get(key) or os.environ.get(key) or "").strip()
+
+    out = {k: pick(k) for k in SITE_ENV_KEYS}
+    return {"success": True, "values": out}
+
+
+@app.put("/api/settings/site")
+async def settings_site_put(request: Request):
+    body = await request.json()
+    values = body.get("values") or {}
+    if not isinstance(values, dict):
+        raise HTTPException(status_code=400, detail="values must be object")
+
+    updates: dict[str, str] = {}
+    for k, v in values.items():
+        key = str(k or "").strip()
+        if key not in SITE_ENV_KEYS:
+            continue
+        updates[key] = str(v or "").strip()
+
+    _env_write_updates(ENV_PATH, updates, set())
+    for k, v in updates.items():
+        os.environ[k] = v
+
+    return {"success": True, "values": {k: (os.environ.get(k) or "").strip() for k in SITE_ENV_KEYS}}
