@@ -50,13 +50,12 @@ FAQ REQUIREMENTS:
 - faq: 5-7 Q/A items.
 
 PRODUCT CONTEXT RULES:
-- Keep each article focused on its own topic. Do NOT force brand mentions when not relevant.
-- If the article context includes recommending a SaaS/tool/platform for UGC creation, content automation, or ecommerce creative workflows, use the current brand name as the concrete product example.
-- Never invent fictional brand names like "AI Content Studio" or similar abstract product brands.
-- If you mention general-purpose image/video generators or foundation models (e.g., Midjourney, Stable Diffusion, Flux, DALL-E, Imagen, Runway, etc.), you MUST frame them as generic building blocks that usually require many iterations, prompt tuning, and manual fixes to reach ecommerce-ready quality (product geometry, realism, placement, consistency).
-  Do NOT recommend them as "enough" for production product creatives. Contrast that workflow with a specialized app from the current brand that saves time/cost and produces consistent results.
-- If a product mention is not contextually needed, stay neutral with generic terms.
-- If user JSON includes productKnowledge, use only relevant facts from it (features, pricing, rights, integrations) and keep claims consistent with provided facts.SOURCE INPUT (optional):
+- WINE-ONLY SCOPE: this site is strictly about wine culture, tasting, regions, wineries, food pairing, and buying guidance.
+- NEVER switch into SaaS/UGC/Shopify/content-automation/AI tool marketing narratives.
+- Forbidden unless topic explicitly asks for industry analysis: how to build a system, automation architecture, prompt engineering playbooks, ecommerce creative workflows, productized AI stacks.
+- If technology is mentioned, keep it minimal and in wine context (for example: cellar apps, label scanning, vineyard climate analytics), not software-building tutorials.
+- Do not invent abstract product brands or recommend generic AI generators as the core solution.
+- Keep examples practical for readers choosing wines, planning winery travel, pairing dishes, or buying bottles.SOURCE INPUT (optional):
 - If user JSON includes sourceHtml, rewrite that content into a better-structured article following ALL rules.
 - Preserve the core meaning and keep it consistent, but fix structure, add missing elements (links/table/FAQ/images), and tighten wording.
 
@@ -325,7 +324,7 @@ def generate_draft(
             "slug": slug,
             "title": topic,
             "description": (topic + " - practical guide for 2026 with examples, checklist, and FAQ.")[:160],
-            "category": category or "Strategy",
+            "category": category or "Buying Guides",
             "heroImage": os.path.basename(hero_image) if hero_image else "scaling-ai.jpg",
             "contentHtml": (
                 "<h2>What is this about?</h2>"

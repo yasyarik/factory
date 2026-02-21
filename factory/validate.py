@@ -89,6 +89,24 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
     if not isinstance(faq, list) or len(faq) < 5:
         problems.append("missing faq array (need >= 5 Q/A)")
 
+    # wine tenant guardrail: reject cross-tenant technical or ecommerce narratives
+    plain = _strip_tags(html).lower()
+    forbidden_literals = [
+        "my ugc studio",
+        "shopify",
+        "ugc",
+        "content automation",
+        "ecommerce creative",
+        "ad creatives",
+    ]
+    for lit in forbidden_literals:
+        if lit in plain:
+            problems.append(f"wine-only guardrail: forbidden term {lit}")
+            break
+
+    if re.search(r"hows+tos+build", plain) and re.search(r"(matrix|automation|system|workflow|pipeline|stack)", plain):
+        problems.append("wine-only guardrail: technical build-guide content is not allowed")
+
     for tag in ("h2", "h3"):
         blocks = re.split(r"(<" + tag + r"[^>]*>.*?</" + tag + r">)", html, flags=re.IGNORECASE | re.DOTALL)
         for i in range(1, len(blocks), 2):

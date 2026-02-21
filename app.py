@@ -1860,16 +1860,30 @@ def publish(job_id: str):
         )
 
     log_event(DB_PATH, job_id, "PUBLISHED", f"Published: {url}")
-
     try:
         origin = _site_origin().rstrip("/")
-        sitemap_urls = [
+        candidates = [
             f"{origin}/sitemap_index.xml",
+            f"{origin}/sitemap.xml",
+            f"{origin}/sitemap-en.xml",
             f"{origin}/sitemap-ru.xml",
             f"{origin}/sitemap-es.xml",
             f"{origin}/sitemap-de.xml",
             f"{origin}/sitemap-fr.xml",
+            f"{origin}/sitemap_blog.xml",
         ]
+
+        sitemap_urls = []
+        for su in candidates:
+            try:
+                req = urllib.request.Request(su, method="HEAD")
+                with urllib.request.urlopen(req, timeout=8) as rr:
+                    code = int(getattr(rr, "status", 200) or 200)
+                    if 200 <= code < 400:
+                        sitemap_urls.append(su)
+            except Exception:
+                continue
+
         gsc = _submit_sitemaps_to_search_console(sitemap_urls)
         if gsc.get("success"):
             log_event(DB_PATH, job_id, "INFO", "Search Console sitemap submit: OK")
