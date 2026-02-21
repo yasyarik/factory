@@ -77,6 +77,8 @@ def _clean_candidate_topic(raw_topic: str, direction: str) -> str | None:
 
     if any(ch in t for ch in "[]{}"):
         return None
+    if "', '" in t or '", "' in t or "\"" in t:
+        return None
 
     # Fix obvious broken auto-suggest fragments.
     t = re.sub(r"(?i)^what i\b", "What is", t)
@@ -162,6 +164,22 @@ def _normalize_topic_case(topic: str) -> str:
         if upper_ratio >= 0.68:
             t = t.title()
     return t
+
+
+def _infer_discovery_category(topic: str, category_hint: str | None = None) -> str:
+    t = (topic or "").lower()
+    h = (category_hint or "").lower()
+    src = f"{t} {h}"
+
+    if re.search(r"(winery|wineries|vineyard|travel|route|tour|bodega|viaje|weingut|reisen|винодель|путешеств)", src):
+        return "Wineries & Travel"
+    if re.search(r"(region|terroir|appellation|map|rioja|tuscany|bordeaux|регион|терруар)", src):
+        return "Wine Regions"
+    if re.search(r"(grape|variet|viticulture|uva|uvas|cépage|cepage|rebsorte|виноград|сорт)", src):
+        return "Grape Varieties"
+    if re.search(r"(pair|pairing|food|dish|meal|maridaje|comida|accord|еда|блюд|сочет)", src):
+        return "Food Pairing"
+    return "Buying Guides"
 
 
 def _infer_intent(topic: str) -> str:
@@ -415,7 +433,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
                 "intent": _infer_intent(topic),
                 "score": round(score * 100.0, 1),
                 "whyNow": why_now,
-                "category": (category_hint or "Strategy").strip() or "Strategy",
+                "category": _infer_discovery_category(topic, category_hint),
                 "sourceCount": len(node["sources"]),
                 "sources": node["sources"][:3],
             }
@@ -448,7 +466,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
                         "intent": _infer_intent(topic),
                         "score": round(25 + fit2 * 40, 1),
                         "whyNow": "trend-adjacent query from current sources",
-                        "category": (category_hint or "Strategy").strip() or "Strategy",
+                        "category": _infer_discovery_category(topic, category_hint),
                         "sourceCount": len(node.get("sources") or []),
                         "sources": (node.get("sources") or [])[:3],
                     }
@@ -473,18 +491,18 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
     if len(items) < cap:
         base = _normalize_topic_case(_to_topic_phrase(direction))
         variants = [
-            f"{base}: best tools in 2026",
-            f"How to run a {base} with AI in 2026?",
-            f"{base} pricing: what to charge in 2026?",
-            f"{base} for ecommerce brands: step-by-step guide",
-            f"{base} prompts that improve image quality",
-            f"{base} workflow for Shopify product pages",
-            f"{base} mistakes to avoid in 2026",
-            f"{base} vs studio shoot: ROI comparison",
-            f"{base} checklist before publishing ads",
-            f"Can AI {base} increase conversion rates?",
-            f"{base} content plan for 30 days",
-            f"{base} case study: before vs after results",
+            f"{base}: best routes and wineries in 2026",
+            f"How to plan a {base} weekend in 2026?",
+            f"{base} budget breakdown for 2026",
+            f"{base} seasonal calendar: when to go",
+            f"{base} itinerary mistakes to avoid",
+            f"{base} tasting checklist for beginners",
+            f"{base} transport and logistics guide",
+            f"{base} with food pairing stops: practical plan",
+            f"{base} 3-day vs 7-day route comparison",
+            f"{base} family-friendly route options",
+            f"{base} hidden gems and local producers",
+            f"{base} booking timeline and reservations",
         ]
         for v in variants:
             t = _clean_candidate_topic(v, direction)
@@ -499,7 +517,7 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
                     "intent": _infer_intent(t),
                     "score": 35.0,
                     "whyNow": "synthetic fallback from direction seed",
-                    "category": (category_hint or "Strategy").strip() or "Strategy",
+                    "category": _infer_discovery_category(t, category_hint),
                     "sourceCount": 0,
                     "sources": [],
                 }

@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 import urllib.request
 import urllib.error
+import html as html_lib
 
 try:
     from zoneinfo import ZoneInfo
@@ -68,6 +69,89 @@ LANDING_DIR = os.environ.get("LANDING_DIR", "/var/www/landing")
 BLOG_DIR = os.path.join(LANDING_DIR, "blog")
 SITEMAP_PATH = os.path.join(LANDING_DIR, "sitemap-en.xml")
 LOCALES = ("ru", "es", "de", "fr")
+
+
+CATEGORY_CANONICAL = (
+    "Wineries & Travel",
+    "Wine Regions",
+    "Grape Varieties",
+    "Food Pairing",
+    "Buying Guides",
+)
+
+CATEGORY_LOCALIZED = {
+    "en": {
+        "Wineries & Travel": "Wineries & Travel",
+        "Wine Regions": "Wine Regions",
+        "Grape Varieties": "Grape Varieties",
+        "Food Pairing": "Food Pairing",
+        "Buying Guides": "Buying Guides",
+    },
+    "ru": {
+        "Wineries & Travel": "Винодельни и путешествия",
+        "Wine Regions": "Винные регионы",
+        "Grape Varieties": "Сорта винограда",
+        "Food Pairing": "Подбор еды и вина",
+        "Buying Guides": "Гайды по покупке",
+    },
+    "es": {
+        "Wineries & Travel": "Bodegas y viajes",
+        "Wine Regions": "Regiones vinícolas",
+        "Grape Varieties": "Variedades de uva",
+        "Food Pairing": "Maridaje",
+        "Buying Guides": "Guías de compra",
+    },
+    "de": {
+        "Wineries & Travel": "Weingüter & Reisen",
+        "Wine Regions": "Wine Regions",
+        "Grape Varieties": "Rebsorten",
+        "Food Pairing": "Food Pairing",
+        "Buying Guides": "Kaufratgeber",
+    },
+    "fr": {
+        "Wineries & Travel": "Domaines & voyages",
+        "Wine Regions": "Régions viticoles",
+        "Grape Varieties": "Cépages",
+        "Food Pairing": "Accords mets-vins",
+        "Buying Guides": "Guides d'achat",
+    },
+}
+
+
+def _canonical_wine_category(value: str | None, *, fallback: str = "Buying Guides") -> str:
+    t = (value or "").strip().lower()
+
+    if not t:
+        return fallback
+
+    for x in CATEGORY_CANONICAL:
+        if t == x.lower():
+            return x
+
+    if re.search(r"(winery|wineries|travel|vineyard|oenotour|bodega|bodegas|viaje|viajes|weingut|reisen|domaines?|voyage|винодель|путешеств)", t):
+        return "Wineries & Travel"
+    if re.search(r"(region|regions|terroir|appellation|rioja|tuscany|bordeaux|регион|терруар|regiones|weinregion|région)", t):
+        return "Wine Regions"
+    if re.search(r"(grape|grapes|variet|viticulture|uva|uvas|cepage|cépage|rebsorte|виноград|сорт)", t):
+        return "Grape Varieties"
+    if re.search(r"(pair|pairing|food|dish|meal|maridaje|comida|accord|mets|speise|еда|блюд|сочет)", t):
+        return "Food Pairing"
+    if re.search(r"(buy|buying|guide|guides|price|cost|gift|compr|kauf|achat|покуп|гайд|руковод)", t):
+        return "Buying Guides"
+
+    return fallback
+
+
+def _localize_category(canonical: str, locale: str = "en") -> str:
+    labels = CATEGORY_LOCALIZED.get(locale) or CATEGORY_LOCALIZED["en"]
+    return labels.get(canonical, canonical)
+
+
+def _pick_category_from_content(*, topic: str | None, title: str | None, description: str | None, category_hint: str | None, content_html: str | None = None) -> str:
+    base = _canonical_wine_category(category_hint, fallback="") if category_hint else ""
+    text = " ".join([topic or "", title or "", description or "", category_hint or "", (content_html or "")[:1600]])
+    guessed = _canonical_wine_category(text, fallback="Buying Guides")
+    return guessed or base or "Buying Guides"
 
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
@@ -195,6 +279,52 @@ def _locale_blog_dir(locale: str) -> str:
 
 def _locale_sitemap_path(locale: str) -> str:
     return os.path.join(LANDING_DIR, f"sitemap-{locale}.xml")
+
+
+def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
+    try:
+        with open(index_path, 'r', encoding='utf-8') as f:
+            src = f.read()
+    except Exception:
+        return
+
+    pattern = re.compile(
+        r'<a\s+href="([^"]+)"\s+class="blog-card">[\s\S]*?'
+        r'<div\s+class="card-image"[^>]*?background-image:\s*url\(\'([^\']+)\'\)[^>]*?>[\s\S]*?'
+        r'<span\s+class="category">([\s\S]*?)</span>[\s\S]*?'
+        r'<h3\s+class="card-title">([\s\S]*?)</h3>[\s\S]*?'
+        r'<p\s+class="card-excerpt">([\s\S]*?)</p>[\s\S]*?'
+        r'</a>',
+        flags=re.IGNORECASE,
+    )
+
+    posts = []
+    for m in pattern.finditer(src):
+        href = (m.group(1) or '').strip()
+        image = (m.group(2) or '').strip()
+        category = html_lib.unescape(re.sub(r'<[^>]+>', '', (m.group(3) or ''))).strip()
+        title = html_lib.unescape(re.sub(r'<[^>]+>', '', (m.group(4) or ''))).strip()
+        desc = html_lib.unescape(re.sub(r'<[^>]+>', '', (m.group(5) or ''))).strip()
+
+        if not href:
+            continue
+        if image and not image.startswith('/'):
+            image = '/blog/' + image.lstrip('./')
+
+        posts.append({
+            'href': href,
+            'image': image or '/hero_ai.jpg',
+            'category': category,
+            'title': title,
+            'description': desc,
+        })
+
+    out = {'updatedAt': utcnow_iso(), 'posts': posts}
+    try:
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write(json.dumps(out, ensure_ascii=False, indent=2) + '\n')
+    except Exception:
+        return
 
 
 def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
@@ -783,7 +913,7 @@ async def create_job(request: Request):
         raise HTTPException(status_code=400, detail="Missing topic")
 
     # Optional overrides
-    category = (body.get("category") or "").strip() or None
+    category = _canonical_wine_category((body.get("category") or "").strip(), fallback="") or None
     hero_image = (body.get("heroImage") or "").strip() or None
     visibility = (body.get("visibility") or "public").strip().lower()
     if visibility not in ("public", "hidden"):
@@ -818,7 +948,7 @@ async def api_topics_discover(request: Request):
     if len(direction) < 3:
         raise HTTPException(status_code=400, detail="Direction must be at least 3 characters")
 
-    category_hint = (body.get("categoryHint") or body.get("category") or "").strip() or None
+    category_hint = _canonical_wine_category((body.get("categoryHint") or body.get("category") or "").strip(), fallback="") or None
 
     try:
         limit = int(body.get("limit") or 20)
@@ -1139,7 +1269,7 @@ async def topic_autodiscovery_set_settings(request: Request):
     if enabled and len(direction) < 3:
         raise HTTPException(status_code=400, detail="direction is required when enabled")
 
-    category_hint = (body.get("categoryHint") or "").strip()
+    category_hint = _canonical_wine_category((body.get("categoryHint") or "").strip(), fallback="")
     try:
         per_run_limit = int(body.get("perRunLimit") if body.get("perRunLimit") is not None else 15)
     except Exception:
@@ -1388,6 +1518,7 @@ def generate(job_id: str):
             pass
 
         draft = _ensure_min_faq(draft, topic=topic, min_items=5)
+        draft["category"] = _pick_category_from_content(topic=topic, title=draft.get("title"), description=draft.get("description"), category_hint=draft.get("category") or category, content_html=draft.get("contentHtml"))
         try:
             fixed_html, fixed_count = _autofix_answer_first(str(draft.get("contentHtml") or ""))
             if fixed_count > 0:
@@ -1428,7 +1559,7 @@ def generate(job_id: str):
             slug=draft.get("slug") or slug or _id,
             topic=topic or draft.get("title") or "",
             title=draft.get("title") or "",
-            category=draft.get("category") or category or "Strategy",
+            category=draft.get("category") or category or "Buying Guides",
             hero_image_hint=draft.get("heroImage") or hero_image,
             content_html=draft.get("contentHtml") or "",
         )
@@ -1489,7 +1620,7 @@ def preview(job_id: str):
         blog_dir=BLOG_DIR,
         title=title or "",
         description=desc or "",
-        category=cat or "Strategy",
+        category=cat or "Buying Guides",
         slug=slug or "preview",
         hero_image=hero or "logo.png",
         content_html=content_html,
@@ -1519,6 +1650,7 @@ def publish(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     status, topic, slug, title, desc, cat, hero, content_html, faq_json, sources_json, updated_at, published_url, visibility = r
+    cat = _pick_category_from_content(topic=topic, title=title, description=desc, category_hint=cat, content_html=content_html)
 
     if status not in ("READY", "PUBLISHED", "ERROR"):
         raise HTTPException(status_code=400, detail=f"Job status must be READY, PUBLISHED, or ERROR, got {status}")
@@ -1536,6 +1668,8 @@ def publish(job_id: str):
 
     # Hidden means: page exists, but not indexable and not linked from blog index/sitemap.
     noindex = visibility != "public"
+
+    _ensure_sitemap(SITEMAP_PATH)
 
     log_event(DB_PATH, job_id, "INFO", f"Publishing to landing (visibility={visibility})")
 
@@ -1556,7 +1690,7 @@ def publish(job_id: str):
             slug=slug,
             topic=topic or title or slug,
             title=title or "",
-            category=cat or "Strategy",
+            category=cat or "Buying Guides",
             hero_image_hint=hero,
             content_html=content_html,
         )
@@ -1572,7 +1706,7 @@ def publish(job_id: str):
         blog_dir=BLOG_DIR,
         title=title or "",
         description=desc or "",
-        category=cat or "Strategy",
+        category=cat or "Buying Guides",
         slug=slug,
         hero_image=hero or "logo.png",
         content_html=content_html,
@@ -1599,12 +1733,14 @@ def publish(job_id: str):
             slug=slug,
             title=title or "",
             description=desc or "",
-            category=cat or "Strategy",
+            category=cat or "Buying Guides",
             hero_image=os.path.basename(hero or "logo.png"),
         )
         upsert_sitemap_url(SITEMAP_PATH, url=url)
 
-    paths = [os.path.join("blog", f"{slug}.html"), os.path.join("blog", "index.html"), "sitemap-en.xml"] + (image_paths or [])
+    _rebuild_blog_feed_from_index(os.path.join(BLOG_DIR, "index.html"), os.path.join(BLOG_DIR, "feed.json"))
+
+    paths = [os.path.join("blog", f"{slug}.html"), os.path.join("blog", "index.html"), os.path.join("blog", "feed.json"), "sitemap-en.xml"] + (image_paths or [])
 
     # Publish localized versions (ru/es/de/fr) in the same publish action.
     text_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -1629,9 +1765,10 @@ def publish(job_id: str):
         loc_idx_rel = os.path.join(loc, "blog", "index.html")
         loc_title = title or ""
         loc_desc = desc or ""
-        loc_cat = cat or "Strategy"
+        loc_cat = cat or "Buying Guides"
         loc_content = content_html
         loc_faq = faq
+        loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=cat, content_html=loc_content), loc)
 
         if text_api_key:
             try:
@@ -1648,7 +1785,7 @@ def publish(job_id: str):
                 )
                 loc_title = tr["title"]
                 loc_desc = tr["description"]
-                loc_cat = tr["category"]
+                loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
                 loc_content = tr["contentHtml"]
                 loc_faq = tr["faq"]
             except Exception as e:
@@ -1698,7 +1835,8 @@ def publish(job_id: str):
             )
             upsert_sitemap_url(loc_sitemap, url=loc_url)
 
-        paths.extend([loc_out_rel, loc_idx_rel, f"sitemap-{loc}.xml"])
+        _rebuild_blog_feed_from_index(os.path.join(loc_blog_dir, "index.html"), os.path.join(loc_blog_dir, "feed.json"))
+        paths.extend([loc_out_rel, loc_idx_rel, os.path.join(loc, "blog", "feed.json"), f"sitemap-{loc}.xml"])
 
     # de-dupe while preserving order
     seen = set()
@@ -1841,7 +1979,7 @@ async def update_job(job_id: str, request: Request):
         set_if("description", body["description"].strip())
 
     if isinstance(body.get("category"), str):
-        set_if("category", body["category"].strip())
+        set_if("category", _canonical_wine_category(body["category"].strip(), fallback="Buying Guides"))
 
     if isinstance(body.get("heroImage"), str):
         set_if("hero_image", body["heroImage"].strip())
