@@ -74,43 +74,44 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
         except Exception:
             pass
 
-    # fallback thread
-    points = [p.strip() for p in re.split(r"(?<=[.!?])\\s+", body) if p.strip()]
-    tweets: list[str] = []
-    tweets.append(_truncate(f"{title}. Короткий тред по теме:", 250))
-    for p in points[:4]:
-        tweets.append(_truncate(p, 250))
-    tail = "Итог: тестируйте гипотезы короткими циклами и измеряйте результат."
-    if url:
-        tail = _truncate(tail, 220) + "\n" + url
-    tweets.append(tail)
-    return tweets[:max_posts]
+        raise RuntimeError("X thread generation unavailable (fallback disabled)")
 
 
 def twitter_post_thread(*, access_token: str, tweets: list[str]) -> dict[str, Any]:
-    if not tweets:
-        raise RuntimeError("empty thread")
+    """Post a thread to X/Twitter v2 API using user OAuth2 access token."""
+    token = (access_token or "").strip()
+    if not token:
+        raise RuntimeError("Missing X access token")
 
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    url = "https://api.twitter.com/2/tweets"
+    posts = [t.strip() for t in (tweets or []) if isinstance(t, str) and t.strip()]
+    if not posts:
+        raise RuntimeError("No tweets to publish")
 
-    ids: list[str] = []
-    reply_to: str | None = None
+    endpoint = "https://api.twitter.com/2/tweets"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
 
-    for t in tweets:
-        payload: dict[str, Any] = {"text": t}
-        if reply_to:
-            payload["reply"] = {"in_reply_to_tweet_id": reply_to}
+    first_id = None
+    prev_id = None
+    for text in posts:
+        payload: dict[str, Any] = {"text": _truncate(text, 280)}
+        if prev_id:
+            payload["reply"] = {"in_reply_to_tweet_id": prev_id}
 
-        r = requests.post(url, headers=headers, json=payload, timeout=60)
-        if r.status_code >= 400:
-            raise RuntimeError(f"X post failed: {r.status_code} {r.text}")
-        data = r.json()
-        tid = ((data.get("data") or {}).get("id") or "").strip()
-        if not tid:
-            raise RuntimeError(f"X post missing id: {data}")
-        ids.append(tid)
-        reply_to = tid
+        r = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        data = r.json() if r.content else {}
+        if r.status_code >= 400 or not isinstance(data, dict) or not data.get("data", {}).get("id"):
+            msg = ""
+            if isinstance(data, dict):
+                msg = data.get("detail") or data.get("title") or str(data)
+            raise RuntimeError(f"X post failed ({r.status_code}): {msg or r.text}")
 
-    first = ids[0]
-    return {"tweet_ids": ids, "thread_url": f"https://x.com/i/web/status/{first}"}
+        tid = data["data"]["id"]
+        if not first_id:
+            first_id = tid
+        prev_id = tid
+
+    url = f"https://x.com/i/web/status/{first_id}" if first_id else None
+    return {"ok": True, "id": first_id, "thread_url": url, "count": len(posts)}
