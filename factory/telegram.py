@@ -3,6 +3,7 @@ import os
 import re
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse, urlunparse
 
 import requests
 
@@ -79,6 +80,36 @@ def _to_telegram_html(text: str) -> str:
         pos = m.end()
     out.append(html.escape(src[pos:]))
     return "".join(out)
+
+
+def _ru_article_url(url: str) -> str:
+    raw = (url or "").strip()
+    if not raw:
+        return raw
+    p = urlparse(raw)
+    path = p.path or "/"
+    path = re.sub(r"//+", "/", path)
+    if not path.startswith("/"):
+        path = "/" + path
+    if path.startswith("/ru/") or path == "/ru":
+        ru_path = "/ru/" if path == "/ru" else path
+    elif re.match(r"^/(en|es|de|fr)(/|$)", path):
+        ru_path = re.sub(r"^/(en|es|de|fr)(?=/|$)", "/ru", path, count=1)
+    else:
+        ru_path = "/ru" + path
+    ru_path = re.sub(r"//+", "/", ru_path)
+    return urlunparse((p.scheme, p.netloc, ru_path, p.params, p.query, p.fragment))
+
+
+def _append_ru_site_footer(text: str, url: str) -> str:
+    out = (text or "").strip()
+    ru_url = _ru_article_url(url)
+    if not ru_url:
+        return out
+    footer = f"С полной версией статьи можно ознакомиться на сайте: {ru_url}"
+    if footer in out:
+        return out
+    return (out + "\n\n" + footer).strip()
 
 
 def _cleanup_post_text(text: str) -> str:
@@ -162,17 +193,16 @@ def _validate_ru_post(text: str, *, include_link: bool, url: str) -> list[str]:
 
     hashtags_match = re.search(r"(?im)^Хэштеги\s*:\s*(.+)$", t)
     if not hashtags_match:
-        errs.append("missing hashtags line at the end")
+        errs.append("missing hashtags line")
     else:
         tags = re.findall(r"#[\w\-]+", hashtags_match.group(1))
         if len(tags) < 8:
             errs.append(f"not enough hashtags ({len(tags)}), need >= 8")
-        tail = t[hashtags_match.start():].strip()
-        if "\n" in tail and not tail.startswith("Хэштеги"):
-            errs.append("hashtags block must be final")
 
-    if include_link and url and (url not in t):
-        errs.append("missing required article link")
+    ru_url = _ru_article_url(url)
+    footer_expected = f"С полной версией статьи можно ознакомиться на сайте: {ru_url}" if ru_url else ""
+    if footer_expected and footer_expected not in t:
+        errs.append("missing required RU site link footer")
 
     if not re.search(r"[.!?…]$", t) and not re.search(r"#[\w\-]+\s*$", t):
         errs.append("post seems truncated (bad ending)")
@@ -216,9 +246,6 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
             text = _cleanup_post_text(text)
-            if include_link and url:
-                text = _append_link_before_hashtags(text, url)
-
             last_text = text
             errors = _validate_ru_post(text, include_link=include_link, url=url)
             if not errors:
@@ -263,6 +290,7 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
 
     out = _cleanup_post_text(out)
     out = _normalize_dashes(out)
+    out = _append_ru_site_footer(out, url)
 
     final_errors = _validate_ru_post(out, include_link=include_link, url=url)
     if final_errors:
