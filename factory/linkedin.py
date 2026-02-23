@@ -188,6 +188,31 @@ def _fit_with_hashtags(text: str, tags: list[str], target: int) -> str:
     return out
 
 
+def _ensure_lead_title(text: str, title: str) -> str:
+    t = (text or "").strip()
+    ttl = (title or "").strip()
+    if not ttl:
+        return t
+
+    first = ""
+    for ln in t.splitlines():
+        if ln.strip():
+            first = ln.strip()
+            break
+
+    def _norm(v: str) -> list[str]:
+        v = re.sub(r"[^a-zа-яё0-9 ]+", " ", (v or "").lower())
+        return [x for x in v.split() if x]
+
+    first_words = set(_norm(first))
+    title_words = set(_norm(ttl))
+    overlap = len(first_words & title_words)
+
+    if (not first) or len(first) > 140 or overlap < 2:
+        return (ttl + "\n\n" + t).strip()
+    return t
+
+
 def _has_section_headers(text: str, min_headers: int = 2) -> bool:
     t = _strip_hashtag_tail(text or "")
     count = 0
@@ -481,6 +506,7 @@ def build_linkedin_post(
                     if len(text) >= min_len:
                         break
 
+            text = _ensure_lead_title(text, title)
             text = _fit_with_hashtags(text, context_tags, target)
             if len(text) >= min_len and not _has_section_headers(text, min_headers=2):
                 headers_fix = (
@@ -491,7 +517,8 @@ def build_linkedin_post(
                 )
                 fixed = _call_llm(headers_fix, max_tokens=2600)
                 if fixed:
-                    text = _fit_with_hashtags(fixed, context_tags, target)
+                    text = _ensure_lead_title(fixed, title)
+                    text = _fit_with_hashtags(text, context_tags, target)
 
             if len(text) >= min_len and _has_section_headers(text, min_headers=2):
                 return text + suffix
