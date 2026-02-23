@@ -63,6 +63,147 @@ def _is_author_access_denied(err: Exception) -> bool:
 
 
 
+def _tokenize_for_tags(text: str) -> list[str]:
+    src = (text or '').lower()
+    src = re.sub(r"[^a-z0-9а-яё\s-]", " ", src)
+    src = src.replace('-', ' ')
+    out: list[str] = []
+    for t in src.split():
+        if len(t) < 3:
+            continue
+        out.append(t)
+    return out
+
+
+def _build_context_hashtags(*, title: str, description: str, body: str, max_tags: int = 6) -> list[str]:
+    text = f"{title} {description} {body}"
+    tokens = _tokenize_for_tags(text)
+
+    stop = {
+        'the','and','for','with','from','that','this','your','you','our','are','but','not','how','why','what','when','into','using',
+        'choose','choosing','ultimate','complete','practical','tips','guide','mastering','learn','insights',
+        'about','more','than','can','will','its','their','they','have','has','had','one','two','new','best','guide','2025','2026',
+        'это','как','что','для','или','при','про','без','под','над','его','ее','это','эти','этом','этих','когда','почему','чтобы',
+        'есть','быть','вам','ваш','ваша','ваши','мы','они','она','оно','также','только','очень','через','после','перед','где','который'
+    }
+
+    phrase_map = [
+        ('my ugc studio', 'MyUGCStudio'),
+        ('tiktok', 'TikTokAds'),
+        ('shopify', 'Shopify'),
+        ('dropshipping', 'Dropshipping'),
+        ('amazon fba', 'AmazonFBA'),
+        ('fba', 'AmazonFBA'),
+        ('ugc', 'UGC'),
+        ('ecommerce', 'Ecommerce'),
+        ('e commerce', 'Ecommerce'),
+        ('content', 'ContentMarketing'),
+        ('seo', 'SEO'),
+        ('geo', 'GEO'),
+        ('localization', 'Localization'),
+        ('ai', 'AI'),
+        ('automation', 'Automation'),
+        ('conversion', 'ConversionRate'),
+        ('ads', 'PerformanceMarketing'),
+        ('video', 'VideoMarketing'),
+        ('wine', 'Wine'),
+        ('winery', 'Winery'),
+        ('vineyard', 'Vineyard'),
+        ('sommelier', 'Sommelier'),
+    ]
+
+    base = f" {(title or '').lower()} {(description or '').lower()} {(body or '').lower()} "
+    tags: list[str] = []
+    seen: set[str] = set()
+
+    def add(tag: str):
+        key = tag.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        tags.append('#' + re.sub(r'[^A-Za-z0-9_]', '', tag))
+
+    for needle, tag in phrase_map:
+        if ' ' in needle:
+            matched = needle in base
+        else:
+            matched = re.search(rf'(?<![a-zа-яё0-9]){re.escape(needle)}(?![a-zа-яё0-9])', base) is not None
+        if matched:
+            add(tag)
+        if len(tags) >= max_tags:
+            return tags[:max_tags]
+
+    freq: dict[str, int] = {}
+    for t in tokens:
+        if t in stop:
+            continue
+        if t.isdigit():
+            continue
+        freq[t] = freq.get(t, 0) + 1
+
+    ranked = sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))
+    for t, _ in ranked:
+        if len(t) < 4:
+            continue
+        if len(t) > 24:
+            continue
+        add(t.capitalize())
+        if len(tags) >= max_tags:
+            break
+
+    if not tags:
+        tags = ['#Marketing', '#Content', '#AI', '#Ecommerce']
+
+    return tags[:max_tags]
+
+
+def _strip_hashtag_tail(text: str) -> str:
+    t = (text or '').strip()
+    t = re.sub(r'(?im)^hashtags\s*:\s*.+$', '', t)
+    t = re.sub(r'(?im)^хэштеги\s*:\s*.+$', '', t)
+    lines = [ln for ln in t.splitlines()]
+    while lines:
+        ln = lines[-1].strip()
+        if ln and re.fullmatch(r'(?:#[A-Za-z0-9_]+\s*){2,}', ln):
+            lines.pop()
+            continue
+        break
+    t = '\n'.join(lines)
+    t = re.sub(r'\n{3,}', '\n\n', t).strip()
+    return t
+
+
+def _fit_with_hashtags(text: str, tags: list[str], target: int) -> str:
+    tail = ' '.join(tags).strip()
+    if not tail:
+        return _truncate_to(text, target)
+    reserve = len(tail) + 2
+    core_max = max(200, target - reserve)
+    core = _truncate_to(_strip_hashtag_tail(text), core_max)
+    out = (core + '\n\n' + tail).strip()
+    if len(out) > target:
+        over = len(out) - target
+        core = _truncate_to(core, max(120, len(core) - over - 2))
+        out = (core + '\n\n' + tail).strip()
+    return out
+
+
+def _has_section_headers(text: str, min_headers: int = 2) -> bool:
+    t = _strip_hashtag_tail(text or "")
+    count = 0
+    for ln in t.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if s.startswith("#"):
+            continue
+        if len(s) > 80:
+            continue
+        if s.endswith(":") and not s.startswith("-"):
+            count += 1
+    return count >= min_headers
+
+
 def linkedin_scopes(mode: str = 'member') -> str:
     # Keep scopes minimal to avoid app-permission issues.
     # For posting as a member we need w_member_social.
@@ -241,13 +382,14 @@ def build_linkedin_post(
 
     body = _strip_html_to_text(content_html)
     body = _truncate_to(body, 2600)
+    context_tags = _build_context_hashtags(title=title, description=description, body=body, max_tags=6)
 
     max_total = 3000
     suffix = ("\n\n" + url) if (include_link and url) else ""
     target = max_total - len(suffix)
 
     # Enforce practical depth so LinkedIn posts are not tiny one-liners.
-    min_len = min(target - 120, max(900, int(target * 0.55)))
+    min_len = min(target - 120, max(1600, int(target * 0.55)))
 
     def _normalize_text(txt: str) -> str:
         txt = (txt or "")
@@ -259,6 +401,8 @@ def build_linkedin_post(
             lines.append(line)
         txt = "\n".join(lines)
         # Collapse excessive blank lines (max one empty line between blocks).
+        txt = re.sub(r"\n{3,}", "\n\n", txt)
+        txt = txt.replace("My conclusion: teams win when the feedback loop is fast, measurable, and brutally practical.", "")
         txt = re.sub(r"\n{3,}", "\n\n", txt)
         return txt.strip()
 
@@ -295,10 +439,10 @@ def build_linkedin_post(
 
         gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
-        def _call_llm(prompt_text: str) -> str:
+        def _call_llm(prompt_text: str, max_tokens: int = 2200) -> str:
             payload = {
                 "contents": [{"role": "user", "parts": [{"text": prompt_text}]}],
-                "generationConfig": {"temperature": 0.65, "maxOutputTokens": 1200},
+                "generationConfig": {"temperature": 0.65, "maxOutputTokens": max_tokens},
             }
             r = requests.post(gen_url, json=payload, timeout=60)
             if r.status_code >= 400:
@@ -310,50 +454,54 @@ def build_linkedin_post(
                 t = ""
             return _normalize_text(t)
 
-        text = _call_llm(sys + "\n\n" + user)
+        last_error = "empty model response"
+        for attempt in range(1, 5):
+            attempt_user = user + f"\n\nATTEMPT: {attempt}/4"
+            text = _call_llm(sys + "\n\n" + attempt_user)
 
-        # Retry once with explicit expansion instruction if too short.
-        if text and len(text) < min_len:
-            expand = (
-                f"Expand this LinkedIn post to between {min_len} and {target} characters. "
-                "Keep first-person voice and structure with clean paragraph breaks and section headers, add concrete details and examples, no fluff, plain text only.\n\n"
-                f"POST:\n{text}"
-            )
-            expanded = _call_llm(expand)
-            if expanded:
-                text = expanded
+            if not text:
+                last_error = "empty model response"
+                continue
 
-        if text:
-            text = _truncate_to(text, target)
-            if len(text) >= min_len:
+            # If too short, request explicit expansion passes (up to 3).
+            if len(text) < min_len:
+                for expand_attempt in range(1, 4):
+                    expand = (
+                        f"Rewrite and expand to {min_len}-{target} chars, preserving all key facts from SOURCE. "
+                        "Use first-person founder voice, clear section headers, clean paragraph breaks, and practical bullets. "
+                        "Plain text only. No markdown. No emojis. No filler. Do not mention blog/article.\n\n"
+                        f"AUTHOR BIO:\n{author_bio}\n\n"
+                        f"SOURCE:\n{body}\n\n"
+                        f"CURRENT DRAFT:\n{text}\n\n"
+                        f"EXPAND ATTEMPT: {expand_attempt}/3"
+                    )
+                    expanded = _call_llm(expand, max_tokens=2600)
+                    if expanded:
+                        text = expanded
+                    if len(text) >= min_len:
+                        break
+
+            text = _fit_with_hashtags(text, context_tags, target)
+            if len(text) >= min_len and not _has_section_headers(text, min_headers=2):
+                headers_fix = (
+                    f"Rewrite this LinkedIn post to keep the same meaning and length {min_len}-{target} chars, "
+                    "but make structure explicit with at least 3 short section headers ending with ':' on separate lines. "
+                    "Keep bullets and paragraph breaks. Plain text only.\n\n"
+                    f"POST:\n{text}"
+                )
+                fixed = _call_llm(headers_fix, max_tokens=2600)
+                if fixed:
+                    text = _fit_with_hashtags(fixed, context_tags, target)
+
+            if len(text) >= min_len and _has_section_headers(text, min_headers=2):
                 return text + suffix
 
-    # Deterministic fallback with guaranteed depth.
-    clean_title = _truncate_to((title or "").strip(), 140)
-    clean_desc = _truncate_to((description or "").strip(), 260)
+            if len(text) < min_len:
+                last_error = f"too short after attempt {attempt}: {len(text)} < {min_len}"
+            else:
+                last_error = f"missing section headers after attempt {attempt}"
 
-    # Pull a few chunks from source so fallback is not generic.
-    chunks = [c.strip() for c in re.split(r"(?<=[.!?])\s+", body) if c.strip()]
-    snippets = chunks[:8]
-    insights = "\n".join([f"- { _truncate_to(x, 170) }" for x in snippets[:6]])
-
-    post = (
-        f"{clean_title}\n\n"
-        f"{clean_desc}\n\n"
-        "From my operator perspective, here is what I found useful in practice:\n"
-        f"{insights}\n\n"
-        "Execution framework I use:\n"
-        "- Define one measurable goal per creative cycle\n"
-        "- Ship 3-5 variants weekly\n"
-        "- Keep winners, cut losers fast\n"
-        "- Scale only what has stable economics\n\n"
-        "My conclusion: teams win when the feedback loop is fast, measurable, and brutally practical.\n\n"
-        "#marketing #ugc #tiktokads #growth #performance"
-    )
-
-    post = _normalize_text(post)
-    post = _truncate_to(post, target)
-    return post + suffix
+    raise RuntimeError(f"LinkedIn post generation failed (fallback disabled): {last_error}")
 
 
 

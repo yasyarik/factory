@@ -11,6 +11,12 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _normalize_dashes(text: str) -> str:
+    t = text or ""
+    t = t.replace("—", "-").replace("–", "-")
+    return t
+
+
 def _strip_html_to_text(html_text: str) -> str:
     s = (html_text or "")
     s = re.sub(r"(?is)<script.*?</script>", " ", s)
@@ -22,6 +28,7 @@ def _strip_html_to_text(html_text: str) -> str:
     s = re.sub(r"<[^>]+>", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     s = re.sub(r"[ \t]+", " ", s)
+    s = _normalize_dashes(s)
     return s.strip()
 
 
@@ -79,8 +86,8 @@ def _cleanup_post_text(text: str) -> str:
     t = re.sub(r"^```(?:text|markdown)?\s*", "", t.strip(), flags=re.I)
     t = re.sub(r"\s*```$", "", t)
     t = re.sub(r"[ \t]+", " ", t)
-    t = re.sub(r"(?m)^###\s*", "", t)
     t = re.sub(r"\n{3,}", "\n\n", t)
+    t = _normalize_dashes(t)
     return t.strip()
 
 
@@ -106,36 +113,60 @@ def _cyrillic_ratio(text: str) -> float:
     return len(cyr) / len(chars)
 
 
+def _extract_sentences(body: str, limit: int = 18) -> list[str]:
+    txt = _normalize_dashes(body or "")
+    txt = re.sub(r"\s+", " ", txt)
+    raw = re.split(r"(?<=[.!?])\s+", txt)
+    out: list[str] = []
+    for s in raw:
+        s = s.strip(" \n\t-•")
+        if len(s) < 45:
+            continue
+        if s in out:
+            continue
+        out.append(s)
+        if len(out) >= limit:
+            break
+    return out
+
+
+
 def _validate_ru_post(text: str, *, include_link: bool, url: str) -> list[str]:
     errs: list[str] = []
-    t = (text or "").strip()
+    t = _cleanup_post_text(text)
 
     if not t:
         return ["empty result"]
 
-    if len(t) < 900:
-        errs.append(f"too short ({len(t)} chars), expected >= 900")
-    if len(t) > 7000:
-        errs.append(f"too long ({len(t)} chars), expected <= 7000")
+    if len(t) < 1200:
+        errs.append(f"too short ({len(t)} chars), expected >= 1200")
+    if len(t) > 3600:
+        errs.append(f"too long ({len(t)} chars), expected <= 3600")
 
-    if re.search(r"[A-Za-zА-Яа-я0-9]{80,}", t):
+    if "—" in t or "–" in t:
+        errs.append("contains long dash")
+
+    if re.search(r"[A-Za-zА-Яа-я0-9]{90,}", t):
         errs.append("contains merged text without spaces")
 
     ratio = _cyrillic_ratio(t)
-    if ratio < 0.65:
-        errs.append(f"not russian enough (cyr ratio={ratio:.2f}, need >=0.65)")
+    if ratio < 0.55:
+        errs.append(f"not russian enough (cyr ratio={ratio:.2f}, need >=0.55)")
 
-    bullet_count = len(re.findall(r"(?m)^\s*[-•]\s+", t))
-    if bullet_count < 3:
-        errs.append(f"not enough bullet points ({bullet_count}), need >= 3")
+    numbered = len(re.findall(r"(?m)^\s*[1-9]\.\s+", t))
+    if numbered < 6:
+        errs.append(f"not enough numbered points ({numbered}), need >= 6")
+
+    if "### Вывод" not in t:
+        errs.append("missing section: ### Вывод")
 
     hashtags_match = re.search(r"(?im)^Хэштеги\s*:\s*(.+)$", t)
     if not hashtags_match:
         errs.append("missing hashtags line at the end")
     else:
         tags = re.findall(r"#[\w\-]+", hashtags_match.group(1))
-        if len(tags) < 3:
-            errs.append(f"not enough hashtags ({len(tags)}), need >= 3")
+        if len(tags) < 8:
+            errs.append(f"not enough hashtags ({len(tags)}), need >= 8")
         tail = t[hashtags_match.start():].strip()
         if "\n" in tail and not tail.startswith("Хэштеги"):
             errs.append("hashtags block must be final")
@@ -151,21 +182,18 @@ def _validate_ru_post(text: str, *, include_link: bool, url: str) -> list[str]:
 
 def _generate_ru_post(api_key: str, model: str, *, title: str, description: str, body: str, include_link: bool, url: str) -> str:
     base_prompt = (
-        "Ты опытный редактор русскоязычного Telegram-канала про маркетинг, UGC и AI. "
-        "Сделай осмысленную адаптацию статьи под Telegram. "
-        "Сохрани ключевые факты и практическую пользу. "
-        "Название бренда My UGC Studio не переводи и не искажай. "
-        "Пиши только по-русски (кроме названия бренда и URL). "
-        "Не добавляй объяснений вне поста. Верни только готовый текст поста.\n\n"
-        "СТРОГАЯ СТРУКТУРА:\n"
+        "Ты редактор Telegram-канала. Нужен длинный, цельный, практичный пост по статье. "
+        "Основа: текст источника ниже. Сохрани факты и суть, пиши на русском. "
+        "Бренд My UGC Studio не переводи. "
+        "Не используй длинное тире, используй обычный дефис.\n\n"
+        "ЖЕСТКАЯ СТРУКТУРА ОТВЕТА:\n"
         "1) Заголовок.\n"
-        "2) Блок 'Почему это важно:'.\n"
-        "3) Блок 'Ключевые тезисы:' + минимум 5 буллетов.\n"
-        "4) Блок 'Практические шаги:' + буллеты.\n"
-        "5) Блок 'Суть статьи в одном блоке:'.\n"
-        "6) Блок 'Вывод и CTA:'.\n"
-        "7) Последняя строка: 'Хэштеги: #... #... #... #...' (русские хэштеги).\n"
-        "Длина поста: 900-2800 символов, без обрывов, без смешения языков. Не используй markdown-заголовки вида ###."
+        "2) Абзац: 'Почему это важно: ...'\n"
+        "3) Ровно 6 нумерованных пунктов формата '1. ...' .. '6. ...', каждый пункт 2-4 предложения, конкретика и польза.\n"
+        "4) Блок '### Вывод' и 3-5 предложений.\n"
+        "5) Фраза с призывом к обсуждению.\n"
+        "6) Последняя строка: 'Хэштеги: ...' минимум 8 хэштегов.\n"
+        "Ограничения: 1400-3200 символов, никаких обрывов, без смешения языков."
     )
 
     user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\n"
@@ -173,60 +201,45 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
 
     feedback = ""
     last_err = None
+    last_text = ""
 
-    for attempt in range(1, 3):
+    for attempt in range(1, 5):
         payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": base_prompt + "\n\n" + feedback + "\n" + user}]}],
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 3200},
+            "generationConfig": {"temperature": 0.55, "maxOutputTokens": 4096},
         }
         try:
-            r = requests.post(url_api, json=payload, timeout=35)
+            r = requests.post(url_api, json=payload, timeout=55)
             if r.status_code >= 400:
                 last_err = RuntimeError(f"Gemini telegram generate failed: {r.status_code} {r.text}")
                 continue
             data = r.json()
             text = data["candidates"][0]["content"]["parts"][0]["text"]
             text = _cleanup_post_text(text)
-
             if include_link and url:
                 text = _append_link_before_hashtags(text, url)
 
+            last_text = text
             errors = _validate_ru_post(text, include_link=include_link, url=url)
             if not errors:
                 return text
 
             feedback = (
-                "Исправь предыдущий вариант. Были ошибки валидации:\n- "
+                "Исправь полностью. Ошибки в прошлом варианте:\n- "
                 + "\n- ".join(errors)
-                + "\nСделай полностью новый валидный финальный пост по правилам."
+                + "\nСделай новый корректный вариант строго по структуре."
             )
             last_err = RuntimeError("; ".join(errors))
         except Exception as e:
             last_err = e
             continue
 
-    # Soft fallback: return last generated text even if strict validator complained.
-    if 'text' in locals() and (text or '').strip():
-        return _cleanup_post_text(text)
+    if last_text.strip():
+        return _cleanup_post_text(last_text)
 
-    # Final deterministic fallback from source material.
-    lead = _truncate((description or '').strip(), 240)
-    if not lead:
-        lead = _truncate((body or '').strip(), 240)
-    steps = [
-        "Определи 1 ключевую проблему аудитории.",
-        "Добавь 3-5 конкретных тезисов с фактами.",
-        "Сделай короткие абзацы и понятный CTA.",
-    ]
-    fallback = (
-        f"{(title or 'Новый разбор').strip()}\n\n"
-        f"Почему это важно: {lead}\n\n"
-        "Ключевые тезисы:\n"
-        "- " + "\n- ".join(steps) + "\n\n"
-        "Вывод и CTA: системный контент работает лучше случайных публикаций.\n"
-        "Хэштеги: #маркетинг #ugc #ai #контент #автоматизация"
-    )
-    return _cleanup_post_text(fallback)
+    if last_err:
+        raise RuntimeError(str(last_err))
+    raise RuntimeError("Gemini telegram generation failed")
 
 
 def build_telegram_post_ru(*, title: str, description: str, content_html: str, url: str, include_link: bool = True) -> str:
@@ -236,7 +249,7 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
         raise RuntimeError("Missing GEMINI_API_KEY/GOOGLE_API_KEY for Telegram generation")
 
     body = _strip_html_to_text(content_html)
-    body = _truncate(body, 10000)
+    body = _truncate(body, 13000)
 
     out = _generate_ru_post(
         api_key,
@@ -248,13 +261,13 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
         url=url,
     ).strip()
 
+    out = _cleanup_post_text(out)
+    out = _normalize_dashes(out)
+
     final_errors = _validate_ru_post(out, include_link=include_link, url=url)
     if final_errors:
-        # Do not block delivery on stylistic validator; keep posting resilient.
-        if include_link and url and (url not in out):
-            out = _append_link_before_hashtags(out, url)
-        if not re.search(r"(?im)^Хэштеги\s*:\s*", out or ""):
-            out = (out.rstrip() + "\n\nХэштеги: #маркетинг #ugc #ai #контент #автоматизация").strip()
+        raise RuntimeError('Telegram post validation failed: ' + '; '.join(final_errors))
+
     return out
 
 
@@ -265,6 +278,20 @@ def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: st
     if not full_text:
         raise RuntimeError("Telegram text is empty")
 
+    sent_photo = None
+    # Always send article image first when available.
+    if photo_abs_path and os.path.exists(photo_abs_path):
+        with open(photo_abs_path, "rb") as f:
+            rp = requests.post(
+                base + "/sendPhoto",
+                data={"chat_id": chat_id},
+                files={"photo": f},
+                timeout=90,
+            )
+        if rp.status_code >= 400:
+            raise RuntimeError(f"sendPhoto failed: {rp.status_code} {rp.text}")
+        sent_photo = rp.json()
+
     chunks = _split_text_for_telegram(full_text, 3900)
     if not chunks:
         raise RuntimeError("Telegram text is empty after split")
@@ -272,16 +299,13 @@ def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: st
     sent_messages: list[dict[str, Any]] = []
     for idx, chunk in enumerate(chunks):
         html_text = _to_telegram_html(chunk)
-        if idx == 0 and hero_public_url:
-            hidden = f'<a href="{html.escape(hero_public_url)}">&#8205;</a>\n'
-            html_text = hidden + html_text
         rm = requests.post(
             base + "/sendMessage",
             data={
                 "chat_id": chat_id,
                 "text": html_text,
                 "parse_mode": "HTML",
-                "disable_web_page_preview": (False if idx == 0 else True),
+                "disable_web_page_preview": True,
             },
             timeout=60,
         )
@@ -290,11 +314,15 @@ def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: st
         sent_messages.append(rm.json())
 
     first_msg = sent_messages[0] if sent_messages else None
+    mode = "text_single" if len(sent_messages) == 1 else "text_multi"
+    if sent_photo:
+        mode = "photo_plus_text_single" if len(sent_messages) == 1 else "photo_plus_text_multi"
+
     return {
-        "photo": None,
+        "photo": sent_photo,
         "message": first_msg,
         "messages": sent_messages,
-        "mode": ("text_single" if len(sent_messages) == 1 else "text_multi"),
+        "mode": mode,
         "sent_text": full_text,
     }
 

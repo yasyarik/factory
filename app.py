@@ -342,8 +342,9 @@ def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
         + "".join([f'<link href="{u}" hreflang="{k}" rel="alternate"/>' for k, u in alts.items()])
         + f'<link href="{alts["en"]}" hreflang="x-default" rel="alternate"/>'
     )
-    html = re.sub(r'(?is)<link\s+rel="canonical"[^>]*>', '', html)
-    html = re.sub(r'(?is)<link\s+href="[^"]+"\s+hreflang="[^"]+"\s+rel="alternate"\s*/?>', '', html)
+    html = re.sub(r"(?is)<link\s+[^>]*rel=[\"\']canonical[\"\'][^>]*>", "", html)
+    html = re.sub(r"(?is)<link\s+[^>]*hreflang=[\"\'][^\"\']+[\"\'][^>]*rel=[\"\']alternate[\"\'][^>]*>", "", html)
+    html = re.sub(r"(?is)<link\s+[^>]*rel=[\"\']alternate[\"\'][^>]*hreflang=[\"\'][^\"\']+[\"\'][^>]*>", "", html)
     html = re.sub(
         r"(?is)<meta\s+[^>]*property=[\"\']og:url[\"\'][^>]*>",
         f'<meta content="{canonical}" property="og:url"/>',

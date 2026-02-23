@@ -2,6 +2,8 @@ import base64
 import json
 import os
 import re
+import subprocess
+import tempfile
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -46,6 +48,52 @@ def _model_id(model: str) -> str:
     if m.startswith("models/"):
         return m[len("models/"):]
     return m
+
+
+def _image_dims(path: str) -> tuple[int, int] | None:
+    try:
+        p = subprocess.run(
+            ["/usr/bin/identify", "-format", "%w %h", path],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if p.returncode != 0:
+            return None
+        out = (p.stdout or "").strip()
+        w_s, h_s = out.split()
+        w = int(w_s)
+        h = int(h_s)
+        if w <= 0 or h <= 0:
+            return None
+        return (w, h)
+    except Exception:
+        return None
+
+
+def _is_square_path(path: str) -> bool:
+    dims = _image_dims(path)
+    if not dims:
+        return False
+    w, h = dims
+    return abs(w - h) <= 2
+
+
+def _is_square_bytes(img_bytes: bytes, mime: str) -> bool:
+    ext = _ext_from_mime(mime)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="cf-img-", suffix=f".{ext}", delete=False) as f:
+            f.write(img_bytes)
+            tmp = f.name
+        return _is_square_path(tmp)
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
 
 
 def gemini_generate_image(*, api_key: str, model: str, prompt: str, timeout_s: int = 180) -> tuple[bytes, str]:
@@ -125,7 +173,7 @@ def ensure_hero_and_inline_images(
 
     # 1) Hero
     hero_hint = os.path.basename(hero_image_hint) if hero_image_hint else ""
-    if hero_hint and os.path.exists(os.path.join(blog_dir, hero_hint)):
+    if hero_hint and os.path.exists(os.path.join(blog_dir, hero_hint)) and _is_square_path(os.path.join(blog_dir, hero_hint)):
         hero_filename = hero_hint
     else:
         # Deterministic hero name.
@@ -138,18 +186,23 @@ def ensure_hero_and_inline_images(
             prompt = (
                 "Create a photorealistic hero image for a blog article. "
                 "Style: modern, cinematic lighting, clean corporate, UGC-advertising vibe, no text, no logos, no watermarks. "
-                "Aspect ratio: 16:9. "
+                "Aspect ratio: 1:1 (square). "
                 f"Topic: {topic}. Title: {title}. Category: {category}."
             )
             last_err = None
-            for mname in ([image_model] + FALLBACK_MODELS):
-                try:
-                    img_bytes, mime = gemini_generate_image(api_key=api_key, model=mname, prompt=prompt)
-                    image_model = mname
-                    last_err = None
+            for gen_attempt in range(1, 5):
+                for mname in ([image_model] + FALLBACK_MODELS):
+                    try:
+                        img_bytes, mime = gemini_generate_image(api_key=api_key, model=mname, prompt=prompt + f" Return STRICTLY square output. Attempt {gen_attempt}/4.")
+                        if not _is_square_bytes(img_bytes, mime):
+                            raise RuntimeError("hero image is not square")
+                        image_model = mname
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                if last_err is None:
                     break
-                except Exception as e:
-                    last_err = e
             if last_err is not None:
                 raise last_err
             ext = _ext_from_mime(mime)
@@ -197,20 +250,25 @@ def ensure_hero_and_inline_images(
         prompt = (
             "Create a photorealistic supporting image for a blog article section. "
             "Style: modern, cinematic lighting, clean corporate, no text, no logos, no watermarks. "
-            "Aspect ratio: 16:9. "
+            "Aspect ratio: 1:1 (square). "
             f"Context topic: {topic}. "
             + (f"Image description: {alt}." if alt else "")
         )
 
         last_err = None
-        for mname in ([image_model] + FALLBACK_MODELS):
-            try:
-                img_bytes, mime = gemini_generate_image(api_key=api_key, model=mname, prompt=prompt)
-                image_model = mname
-                last_err = None
+        for gen_attempt in range(1, 5):
+            for mname in ([image_model] + FALLBACK_MODELS):
+                try:
+                    img_bytes, mime = gemini_generate_image(api_key=api_key, model=mname, prompt=prompt + f" Return STRICTLY square output. Attempt {gen_attempt}/4.")
+                    if not _is_square_bytes(img_bytes, mime):
+                        raise RuntimeError("inline image is not square")
+                    image_model = mname
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+            if last_err is None:
                 break
-            except Exception as e:
-                last_err = e
         if last_err is not None:
             raise last_err
         ext = _ext_from_mime(mime)
