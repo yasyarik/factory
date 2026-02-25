@@ -117,6 +117,26 @@ def list_existing_posts(blog_dir: str) -> list[dict[str, str]]:
     return posts
 
 
+def _prefer_webp_url(image_url: str, blog_dir: str) -> str:
+    u = (image_url or "").strip()
+    if not u:
+        return u
+    if u.startswith("http://") or u.startswith("https://"):
+        return u
+
+    raw = u.split("?", 1)[0]
+    fname = os.path.basename(raw)
+    root_dir = os.path.dirname(blog_dir)
+    base, ext = os.path.splitext(fname)
+    if ext.lower() not in (".png", ".jpg", ".jpeg"):
+        return u
+
+    webp_name = base + ".webp"
+    if os.path.exists(os.path.join(blog_dir, webp_name)) or os.path.exists(os.path.join(root_dir, webp_name)):
+        return u.replace(fname, webp_name)
+    return u
+
+
 def _build_breadcrumbs(title: str) -> str:
     return (
         '<nav class="breadcrumbs" aria-label="Breadcrumb">'
@@ -276,9 +296,9 @@ def render_post_html(
     hero_in_blog = os.path.join(blog_dir, hero_file)
     hero_in_root = os.path.join(os.path.dirname(blog_dir), hero_file)
     if hero_file and os.path.exists(hero_in_blog):
-        image_placeholder = f"/blog/{hero_file}"
+        image_placeholder = _prefer_webp_url(f"/blog/{hero_file}", blog_dir)
     elif hero_file and os.path.exists(hero_in_root):
-        image_placeholder = f"/{hero_file}"
+        image_placeholder = _prefer_webp_url(f"/{hero_file}", blog_dir)
     else:
         image_placeholder = "/logo.png"
 
@@ -343,13 +363,14 @@ def render_post_html(
     url = f"{origin}{locale_prefix}/blog/{slug}.html"
     date_iso = (updated_at or "").split("T", 1)[0] or _utc_date()
 
-    if noindex:
-        # Preview pages are served under /factory/preview/, so make asset URLs absolute.
+    if noindex or locale_prefix:
+        # Locale pages (/ru,/es,/de,/fr) and preview pages need absolute blog asset paths.
         def _abs_img(m: re.Match[str]) -> str:
             src = (m.group(1) or m.group(2) or '').strip()
             if not src:
                 return m.group(0)
-            if src.startswith('http://') or src.startswith('https://'):
+            low = src.lower()
+            if low.startswith('http://') or low.startswith('https://') or low.startswith('data:'):
                 return m.group(0)
             if src.startswith('/') or src.startswith('../'):
                 return m.group(0)
@@ -382,7 +403,7 @@ def render_post_html(
         + '</script>'
     )
 
-    img_url = f"{origin}/blog/{_html_escape(hero_file)}" if hero_file else ""
+    img_url = f"{origin}{_prefer_webp_url(f'/blog/{hero_file}', blog_dir)}" if hero_file else ""
     json_ld_post = (
         '<script type="application/ld+json">'
         + json.dumps(
@@ -462,6 +483,41 @@ def render_post_html(
     return out
 
 
+
+
+def _normalize_blog_index_seo(src: str, href_prefix: str = "/blog") -> str:
+    origin = _site_origin()
+    clean_prefix = "/" + href_prefix.strip("/")
+
+    canonical = f"{origin}{clean_prefix}/"
+    alts = {
+        "en": f"{origin}/blog/",
+        "ru": f"{origin}/ru/blog/",
+        "es": f"{origin}/es/blog/",
+        "de": f"{origin}/de/blog/",
+        "fr": f"{origin}/fr/blog/",
+    }
+
+    src = re.sub(r'(?is)<link\s+[^>]*rel=["\']canonical["\'][^>]*>', '', src)
+    src = re.sub(r'(?is)<link\s+[^>]*hreflang=["\'][^"\']+["\'][^>]*rel=["\']alternate["\'][^>]*>', '', src)
+    src = re.sub(r'(?is)<link\s+[^>]*rel=["\']alternate["\'][^>]*hreflang=["\'][^"\']+["\'][^>]*>', '', src)
+    src = re.sub(
+        r'(?is)<meta\s+[^>]*property=["\']og:url["\'][^>]*>',
+        f'<meta content="{canonical}" property="og:url"/>',
+        src,
+        count=1,
+    )
+
+    block = (
+        f'<link href="{canonical}" rel="canonical"/>'
+        + ''.join([f'<link href="{u}" hreflang="{k}" rel="alternate"/>' for k, u in alts.items()])
+        + f'<link href="{alts["en"]}" hreflang="x-default" rel="alternate"/>'
+    )
+    if '</head>' in src:
+        src = src.replace('</head>', block + '</head>', 1)
+    return src
+
+
 def upsert_blog_index_card(
     blog_dir: str,
     *,
@@ -502,7 +558,7 @@ def upsert_blog_index_card(
     card = (
         f'\n            <!-- {marker_prefix}:{slug} -->\n'
         f'            <a href="{href}" class="blog-card">\n'
-        f'                <div class="card-image" style="background-image: url(\'{_html_escape(hero_image)}\');"></div>\n'
+        f'                <div class="card-image" style="background-image: url(\'{_html_escape(_prefer_webp_url(hero_image, blog_dir))}\');"></div>\n'
         f'                <div class="card-content">\n'
         f'                    <span class="category">{_html_escape(category)}</span>\n'
         f'                    <h3 class="card-title">{_html_escape(title)}</h3>\n'
@@ -518,6 +574,7 @@ def upsert_blog_index_card(
 
     insert_at = idx + len(needle)
     out = src[:insert_at] + card + src[insert_at:]
+    out = _normalize_blog_index_seo(out, href_prefix=clean_prefix)
     _write(index_path, out)
 
 
@@ -553,6 +610,7 @@ def remove_blog_index_card(
     out = pattern.sub("", src, count=1)
 
     if out != src:
+        out = _normalize_blog_index_seo(out, href_prefix=clean_prefix)
         _write(index_path, out)
 
 
@@ -596,6 +654,14 @@ def remove_sitemap_url(sitemap_path: str, *, url: str) -> None:
         _write(sitemap_path, out)
 
 
+def _git_push_best_effort(repo_dir: str) -> None:
+    try:
+        subprocess.check_call(["git", "-C", repo_dir, "push", "origin", "main"])
+    except subprocess.CalledProcessError:
+        # Do not block site publication by git transport failures.
+        return
+
+
 def git_commit_push_with_remove(*, repo_dir: str, message: str, add_paths: list[str], remove_paths: list[str]) -> None:
     for p in remove_paths:
         subprocess.check_call(["git", "-C", repo_dir, "rm", "-f", "--ignore-unmatch", p])
@@ -608,7 +674,7 @@ def git_commit_push_with_remove(*, repo_dir: str, message: str, add_paths: list[
     except subprocess.CalledProcessError:
         return
 
-    subprocess.check_call(["git", "-C", repo_dir, "push", "origin", "main"])
+    _git_push_best_effort(repo_dir)
 
 
 def git_commit_push(*, repo_dir: str, message: str, paths: list[str]) -> None:
@@ -620,4 +686,4 @@ def git_commit_push(*, repo_dir: str, message: str, paths: list[str]) -> None:
     except subprocess.CalledProcessError:
         return
 
-    subprocess.check_call(["git", "-C", repo_dir, "push", "origin", "main"])
+    _git_push_best_effort(repo_dir)
