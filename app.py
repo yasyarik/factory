@@ -57,6 +57,7 @@ from factory.telegram import (
 )
 from factory.twitter import (
     build_twitter_thread_ru,
+    extract_article_image_urls_for_x,
     twitter_post_thread,
 )
 
@@ -3633,7 +3634,8 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
                 url=url,
                 max_posts=6,
             )
-            out = twitter_post_thread(access_token=access_token, tweets=tweets, oauth1=(oauth1 if has_oauth1 else None))
+            media_urls = extract_article_image_urls_for_x(content_html=draft_html or "", page_url=url, max_images=4)
+            out = twitter_post_thread(access_token=access_token, tweets=tweets, oauth1=(oauth1 if has_oauth1 else None), media_urls=media_urls)
             post_url = out.get("thread_url")
 
             with db_connect(DB_PATH) as conn:
@@ -3646,7 +3648,7 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
                 job_id=job_id,
                 channel="twitter",
                 content_text="\n\n---\n\n".join(tweets),
-                content_json={"tweets": tweets, "response": out},
+                content_json={"tweets": tweets, "response": out, "media_urls": media_urls},
                 remote_url=post_url,
                 status="POSTED",
             )

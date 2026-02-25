@@ -6,7 +6,7 @@ import re
 import secrets
 import time
 from typing import Any
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, urljoin, urlsplit
 
 import requests
 
@@ -36,7 +36,31 @@ def _truncate(s: str, max_len: int) -> str:
     return cut.rstrip(" ,;:-")
 
 
-def build_twitter_thread_ru(*, title: str, description: str, content_html: str, url: str, max_posts: int = 6) -> list[str]:
+def _extract_image_urls(content_html: str, page_url: str, max_images: int = 4) -> list[str]:
+    html = content_html or ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', html, flags=re.IGNORECASE):
+        src = (m.group(1) or "").strip()
+        if not src:
+            continue
+        abs_u = urljoin(page_url or "https://myugc.studio/", src)
+        if not abs_u.startswith("http"):
+            continue
+        if abs_u in seen:
+            continue
+        seen.add(abs_u)
+        out.append(abs_u)
+        if len(out) >= max_images:
+            break
+    return out
+
+
+def extract_article_image_urls_for_x(*, content_html: str, page_url: str, max_images: int = 4) -> list[str]:
+    return _extract_image_urls(content_html or "", page_url or "https://myugc.studio/", max_images=max_images)
+
+
+def build_twitter_thread_ru(*, title: str, description: str, content_html: str, url: str, max_posts: int = 4) -> list[str]:
     body = _strip_html_to_text(content_html)
     body = _truncate(body, 7000)
 
@@ -45,17 +69,18 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
 
     if api_key:
         prompt = (
-            "Сделай ТРЕД для X (Twitter) на русском на основе источника. "
-            "Требования: 4-6 коротких постов, каждый до 260 символов, читабельно, по делу, без воды. "
-            "Сохрани факты. Последний пост: вывод + CTA. "
-            "Если по контексту нужен SaaS для UGC/автоматизации, упоминай My UGC Studio, без выдуманных брендов. "
-            "Верни JSON вида {\"tweets\":[\"...\",\"...\"]}."
+            "Сделай публикацию для X на русском по статье. "
+            "Формат: 1-3 поста (лучше 1-2). "
+            "Первый пост = короткое саммари статьи до 240 символов, четкая польза и вывод. "
+            "Если есть второй/третий пост — только конкретные инсайты/цифры, без воды. "
+            "Без выдуманных брендов. Если уместно упомяни My UGC Studio. "
+            "Верни JSON: {\"tweets\":[\"...\",\"...\"]}."
         )
         user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\nURL:{url}"
         gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
         payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": prompt + "\n\n" + user}]}],
-            "generationConfig": {"temperature": 0.6, "maxOutputTokens": 1200, "responseMimeType": "application/json"},
+            "generationConfig": {"temperature": 0.5, "maxOutputTokens": 900, "responseMimeType": "application/json"},
         }
         try:
             r = requests.post(gen_url, json=payload, timeout=60)
@@ -82,7 +107,11 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
 
         raise RuntimeError("X thread generation unavailable (fallback disabled)")
 
-
+    # conservative fallback if AI key absent
+    first = _truncate((title or "").strip(), 220)
+    if description:
+        first = _truncate(f"{first}: {description}", 240)
+    return [f"{first}\n{url}"] if url else [first]
 
 
 def _pct(s: str) -> str:
@@ -123,8 +152,42 @@ def _oauth1_auth_header(*, method: str, url: str, consumer_key: str, consumer_se
     header = "OAuth " + ", ".join([f'{_pct(k)}="{_pct(v)}"' for k, v in sorted(oauth_params.items())])
     return header
 
-def twitter_post_thread(*, access_token: str | None = None, tweets: list[str], oauth1: dict[str, str] | None = None) -> dict[str, Any]:
-    """Post a thread to X/Twitter v2 API using OAuth2 bearer or OAuth1 user credentials."""
+
+def _upload_media_oauth1(*, media_url: str, oauth1: dict[str, str]) -> str | None:
+    try:
+        dl = requests.get(media_url, timeout=25)
+        if dl.status_code >= 400 or not dl.content:
+            return None
+    except Exception:
+        return None
+
+    endpoint = "https://upload.twitter.com/1.1/media/upload.json"
+    auth_header = _oauth1_auth_header(
+        method="POST",
+        url=endpoint,
+        consumer_key=(oauth1.get("api_key") or "").strip(),
+        consumer_secret=(oauth1.get("api_secret") or "").strip(),
+        token=(oauth1.get("access_token") or "").strip(),
+        token_secret=(oauth1.get("access_token_secret") or "").strip(),
+    )
+    try:
+        r = requests.post(
+            endpoint,
+            headers={"Authorization": auth_header},
+            files={"media": ("image.jpg", dl.content)},
+            timeout=40,
+        )
+        data = r.json() if r.content else {}
+        if r.status_code >= 400:
+            return None
+        mid = (data.get("media_id_string") if isinstance(data, dict) else None) or ""
+        return mid.strip() or None
+    except Exception:
+        return None
+
+
+def twitter_post_thread(*, access_token: str | None = None, tweets: list[str], oauth1: dict[str, str] | None = None, media_urls: list[str] | None = None) -> dict[str, Any]:
+    """Post to X/Twitter v2 using OAuth2 bearer or OAuth1. If OAuth1 is set, can attach up to 4 images to first tweet."""
     token = (access_token or "").strip()
     oauth1 = oauth1 or {}
     use_oauth1 = bool(
@@ -140,17 +203,24 @@ def twitter_post_thread(*, access_token: str | None = None, tweets: list[str], o
     if not posts:
         raise RuntimeError("No tweets to publish")
 
+    media_ids: list[str] = []
+    if use_oauth1 and media_urls:
+        for u in media_urls[:4]:
+            mid = _upload_media_oauth1(media_url=str(u), oauth1=oauth1)
+            if mid:
+                media_ids.append(mid)
+
     endpoint = "https://api.twitter.com/2/tweets"
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
 
     first_id = None
     prev_id = None
-    for text in posts:
+    for i, text in enumerate(posts):
         payload: dict[str, Any] = {"text": _truncate(text, 280)}
         if prev_id:
             payload["reply"] = {"in_reply_to_tweet_id": prev_id}
+        if i == 0 and media_ids:
+            payload["media"] = {"media_ids": media_ids}
 
         req_headers = dict(headers)
         if use_oauth1:
@@ -179,4 +249,4 @@ def twitter_post_thread(*, access_token: str | None = None, tweets: list[str], o
         prev_id = tid
 
     url = f"https://x.com/i/web/status/{first_id}" if first_id else None
-    return {"ok": True, "id": first_id, "thread_url": url, "count": len(posts)}
+    return {"ok": True, "id": first_id, "thread_url": url, "count": len(posts), "media_count": len(media_ids)}
