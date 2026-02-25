@@ -1,6 +1,12 @@
+import base64
+import hashlib
+import hmac
 import os
 import re
+import secrets
+import time
 from typing import Any
+from urllib.parse import parse_qsl, quote, urlsplit
 
 import requests
 
@@ -77,11 +83,58 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
         raise RuntimeError("X thread generation unavailable (fallback disabled)")
 
 
-def twitter_post_thread(*, access_token: str, tweets: list[str]) -> dict[str, Any]:
-    """Post a thread to X/Twitter v2 API using user OAuth2 access token."""
+
+
+def _pct(s: str) -> str:
+    return quote(str(s), safe="~-._")
+
+
+def _oauth1_auth_header(*, method: str, url: str, consumer_key: str, consumer_secret: str, token: str, token_secret: str) -> str:
+    now = str(int(time.time()))
+    nonce = secrets.token_hex(12)
+
+    oauth_params = {
+        "oauth_consumer_key": consumer_key,
+        "oauth_nonce": nonce,
+        "oauth_signature_method": "HMAC-SHA1",
+        "oauth_timestamp": now,
+        "oauth_token": token,
+        "oauth_version": "1.0",
+    }
+
+    split = urlsplit(url)
+    base_url = f"{split.scheme}://{split.netloc}{split.path}"
+
+    sig_params: list[tuple[str, str]] = []
+    for k, v in parse_qsl(split.query, keep_blank_values=True):
+        sig_params.append((k, v))
+    for k, v in oauth_params.items():
+        sig_params.append((k, v))
+
+    sig_params.sort(key=lambda x: (_pct(x[0]), _pct(x[1])))
+    normalized = "&".join([f"{_pct(k)}={_pct(v)}" for k, v in sig_params])
+
+    base_string = "&".join([_pct(method.upper()), _pct(base_url), _pct(normalized)])
+    signing_key = f"{_pct(consumer_secret)}&{_pct(token_secret)}"
+    digest = hmac.new(signing_key.encode("utf-8"), base_string.encode("utf-8"), hashlib.sha1).digest()
+    signature = base64.b64encode(digest).decode("ascii")
+
+    oauth_params["oauth_signature"] = signature
+    header = "OAuth " + ", ".join([f'{_pct(k)}="{_pct(v)}"' for k, v in sorted(oauth_params.items())])
+    return header
+
+def twitter_post_thread(*, access_token: str | None = None, tweets: list[str], oauth1: dict[str, str] | None = None) -> dict[str, Any]:
+    """Post a thread to X/Twitter v2 API using OAuth2 bearer or OAuth1 user credentials."""
     token = (access_token or "").strip()
-    if not token:
-        raise RuntimeError("Missing X access token")
+    oauth1 = oauth1 or {}
+    use_oauth1 = bool(
+        (oauth1.get("api_key") or "").strip()
+        and (oauth1.get("api_secret") or "").strip()
+        and (oauth1.get("access_token") or "").strip()
+        and (oauth1.get("access_token_secret") or "").strip()
+    )
+    if not token and not use_oauth1:
+        raise RuntimeError("Missing X credentials")
 
     posts = [t.strip() for t in (tweets or []) if isinstance(t, str) and t.strip()]
     if not posts:
@@ -89,7 +142,6 @@ def twitter_post_thread(*, access_token: str, tweets: list[str]) -> dict[str, An
 
     endpoint = "https://api.twitter.com/2/tweets"
     headers = {
-        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
 
@@ -100,7 +152,20 @@ def twitter_post_thread(*, access_token: str, tweets: list[str]) -> dict[str, An
         if prev_id:
             payload["reply"] = {"in_reply_to_tweet_id": prev_id}
 
-        r = requests.post(endpoint, headers=headers, json=payload, timeout=30)
+        req_headers = dict(headers)
+        if use_oauth1:
+            req_headers["Authorization"] = _oauth1_auth_header(
+                method="POST",
+                url=endpoint,
+                consumer_key=(oauth1.get("api_key") or "").strip(),
+                consumer_secret=(oauth1.get("api_secret") or "").strip(),
+                token=(oauth1.get("access_token") or "").strip(),
+                token_secret=(oauth1.get("access_token_secret") or "").strip(),
+            )
+        else:
+            req_headers["Authorization"] = f"Bearer {token}"
+
+        r = requests.post(endpoint, headers=req_headers, json=payload, timeout=30)
         data = r.json() if r.content else {}
         if r.status_code >= 400 or not isinstance(data, dict) or not data.get("data", {}).get("id"):
             msg = ""

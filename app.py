@@ -190,6 +190,10 @@ SOCIAL_ENV_KEYS = {
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     "TWITTER_BEARER_TOKEN",
+    "TWITTER_API_KEY",
+    "TWITTER_API_SECRET",
+    "TWITTER_ACCESS_TOKEN",
+    "TWITTER_ACCESS_TOKEN_SECRET",
     "GEMINI_API_KEY",
     "GEMINI_TEXT_MODEL",
     "GEMINI_IMAGE_MODEL",
@@ -199,6 +203,9 @@ SOCIAL_SECRET_KEYS = {
     "LINKEDIN_CLIENT_SECRET",
     "TELEGRAM_BOT_TOKEN",
     "TWITTER_BEARER_TOKEN",
+    "TWITTER_API_SECRET",
+    "TWITTER_ACCESS_TOKEN",
+    "TWITTER_ACCESS_TOKEN_SECRET",
     "GEMINI_API_KEY",
 }
 
@@ -1144,6 +1151,10 @@ def _social_settings_snapshot() -> dict[str, Any]:
     out["TELEGRAM_BOT_TOKEN"] = pick("TELEGRAM_BOT_TOKEN")
     out["TELEGRAM_CHAT_ID"] = pick("TELEGRAM_CHAT_ID")
     out["TWITTER_BEARER_TOKEN"] = pick("TWITTER_BEARER_TOKEN", "X_BEARER_TOKEN")
+    out["TWITTER_API_KEY"] = pick("TWITTER_API_KEY", "X_API_KEY", "TWITTER_CONSUMER_KEY")
+    out["TWITTER_API_SECRET"] = pick("TWITTER_API_SECRET", "X_API_SECRET", "TWITTER_CONSUMER_SECRET")
+    out["TWITTER_ACCESS_TOKEN"] = pick("TWITTER_ACCESS_TOKEN", "X_ACCESS_TOKEN")
+    out["TWITTER_ACCESS_TOKEN_SECRET"] = pick("TWITTER_ACCESS_TOKEN_SECRET", "X_ACCESS_TOKEN_SECRET")
     out["GEMINI_API_KEY"] = pick("GEMINI_API_KEY", "GOOGLE_API_KEY")
     out["GEMINI_TEXT_MODEL"] = pick("GEMINI_TEXT_MODEL", "GEMINI_MODEL_TEXT", "GEMINI_MODEL") or "gemini-2.5-flash"
     out["GEMINI_IMAGE_MODEL"] = pick("GEMINI_IMAGE_MODEL", "GEMINI_MODEL_IMAGE") or "gemini-2.5-flash-image"
@@ -3136,6 +3147,18 @@ async def settings_social_put(request: Request):
         updates["LI_PERSON_URN"] = updates["LINKEDIN_PERSON_URN"]
     if "LINKEDIN_AUTHOR_BIO" in updates:
         updates["LI_AUTHOR_BIO"] = updates["LINKEDIN_AUTHOR_BIO"]
+    if "TWITTER_BEARER_TOKEN" in updates:
+        updates["X_BEARER_TOKEN"] = updates["TWITTER_BEARER_TOKEN"]
+    if "TWITTER_API_KEY" in updates:
+        updates["X_API_KEY"] = updates["TWITTER_API_KEY"]
+        updates["TWITTER_CONSUMER_KEY"] = updates["TWITTER_API_KEY"]
+    if "TWITTER_API_SECRET" in updates:
+        updates["X_API_SECRET"] = updates["TWITTER_API_SECRET"]
+        updates["TWITTER_CONSUMER_SECRET"] = updates["TWITTER_API_SECRET"]
+    if "TWITTER_ACCESS_TOKEN" in updates:
+        updates["X_ACCESS_TOKEN"] = updates["TWITTER_ACCESS_TOKEN"]
+    if "TWITTER_ACCESS_TOKEN_SECRET" in updates:
+        updates["X_ACCESS_TOKEN_SECRET"] = updates["TWITTER_ACCESS_TOKEN_SECRET"]
     if "GEMINI_API_KEY" in updates:
         updates["GOOGLE_API_KEY"] = updates["GEMINI_API_KEY"]
     if "GEMINI_TEXT_MODEL" in updates:
@@ -3153,6 +3176,16 @@ async def settings_social_put(request: Request):
         clears.add("LI_AUTHOR_BIO")
     if "TWITTER_BEARER_TOKEN" in clears:
         clears.add("X_BEARER_TOKEN")
+    if "TWITTER_API_KEY" in clears:
+        clears.add("X_API_KEY")
+        clears.add("TWITTER_CONSUMER_KEY")
+    if "TWITTER_API_SECRET" in clears:
+        clears.add("X_API_SECRET")
+        clears.add("TWITTER_CONSUMER_SECRET")
+    if "TWITTER_ACCESS_TOKEN" in clears:
+        clears.add("X_ACCESS_TOKEN")
+    if "TWITTER_ACCESS_TOKEN_SECRET" in clears:
+        clears.add("X_ACCESS_TOKEN_SECRET")
     if "GEMINI_API_KEY" in clears:
         clears.add("GOOGLE_API_KEY")
     if "GEMINI_TEXT_MODEL" in clears:
@@ -3553,8 +3586,15 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
     payload = payload or {}
 
     access_token = (os.environ.get("TWITTER_BEARER_TOKEN") or os.environ.get("X_BEARER_TOKEN") or "").strip()
-    if not access_token:
-        raise HTTPException(status_code=500, detail="Missing TWITTER_BEARER_TOKEN (OAuth2 User token required)")
+    oauth1 = {
+        "api_key": (os.environ.get("TWITTER_API_KEY") or os.environ.get("X_API_KEY") or os.environ.get("TWITTER_CONSUMER_KEY") or "").strip(),
+        "api_secret": (os.environ.get("TWITTER_API_SECRET") or os.environ.get("X_API_SECRET") or os.environ.get("TWITTER_CONSUMER_SECRET") or "").strip(),
+        "access_token": (os.environ.get("TWITTER_ACCESS_TOKEN") or os.environ.get("X_ACCESS_TOKEN") or "").strip(),
+        "access_token_secret": (os.environ.get("TWITTER_ACCESS_TOKEN_SECRET") or os.environ.get("X_ACCESS_TOKEN_SECRET") or "").strip(),
+    }
+    has_oauth1 = all(oauth1.values())
+    if not access_token and not has_oauth1:
+        raise HTTPException(status_code=500, detail="Missing X credentials: set TWITTER_BEARER_TOKEN (OAuth2) or OAuth1 keys")
 
     with db_connect(DB_PATH) as conn:
         job = conn.execute(
@@ -3593,7 +3633,7 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
                 url=url,
                 max_posts=6,
             )
-            out = twitter_post_thread(access_token=access_token, tweets=tweets)
+            out = twitter_post_thread(access_token=access_token, tweets=tweets, oauth1=(oauth1 if has_oauth1 else None))
             post_url = out.get("thread_url")
 
             with db_connect(DB_PATH) as conn:
