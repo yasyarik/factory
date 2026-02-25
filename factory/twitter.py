@@ -99,9 +99,10 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
         except Exception:
             pass
 
-        raise RuntimeError("X thread generation unavailable (fallback disabled)")
+        # Gemini failure should not block publishing; fall back to deterministic summary.
+        pass
 
-    # conservative fallback if AI key absent
+    # conservative fallback if AI key absent or generation failed
     first = _truncate((title or "").strip(), 220)
     if description:
         first = _truncate(f"{first}: {description}", 240)
