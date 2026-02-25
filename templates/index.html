@@ -411,12 +411,13 @@
                 <input id="setTgChatId" style="flex:1; min-width:240px" placeholder="TELEGRAM_CHAT_ID" />
               </div>
               <div class="row">
-                <input id="setTwApiKey" style="flex:1; min-width:220px" placeholder="TWITTER_API_KEY (OAuth1 Consumer Key)" />
-                <input id="setTwApiSecret" style="flex:1; min-width:220px" placeholder="TWITTER_API_SECRET" />
+                <input id="setTwApiKey" style="flex:1; min-width:220px" placeholder="Consumer Key (API Key)" />
+                <input id="setTwApiSecret" style="flex:1; min-width:220px" placeholder="Consumer Key Secret (API Secret)" />
               </div>
+              <div class="muted" style="margin-top:-4px;">Use values from X Developer: OAuth 1.0 Keys → Consumer Key / Consumer Key Secret / Access Token / Access Token Secret.</div>
               <div class="row">
-                <input id="setTwAccessToken" style="flex:1; min-width:220px" placeholder="TWITTER_ACCESS_TOKEN" />
-                <input id="setTwAccessTokenSecret" style="flex:1; min-width:220px" placeholder="TWITTER_ACCESS_TOKEN_SECRET" />
+                <input id="setTwAccessToken" style="flex:1; min-width:220px" placeholder="Access Token" />
+                <input id="setTwAccessTokenSecret" style="flex:1; min-width:220px" placeholder="Access Token Secret" />
               </div>
               <div class="row">
                 <input id="setGeminiKey" style="flex:1; min-width:260px" placeholder="GEMINI_API_KEY" />
@@ -588,9 +589,9 @@
 
           if (el('setLiClientSecret')) el('setLiClientSecret').placeholder = (m.LINKEDIN_CLIENT_SECRET && m.LINKEDIN_CLIENT_SECRET.hasValue) ? ('saved: ' + m.LINKEDIN_CLIENT_SECRET.value) : 'LINKEDIN_CLIENT_SECRET (empty)';
           if (el('setTgToken')) el('setTgToken').placeholder = (m.TELEGRAM_BOT_TOKEN && m.TELEGRAM_BOT_TOKEN.hasValue) ? ('saved: ' + m.TELEGRAM_BOT_TOKEN.value) : 'TELEGRAM_BOT_TOKEN (empty)';
-          if (el('setTwApiSecret')) el('setTwApiSecret').placeholder = (m.TWITTER_API_SECRET && m.TWITTER_API_SECRET.hasValue) ? ('saved: ' + m.TWITTER_API_SECRET.value) : 'TWITTER_API_SECRET (empty)';
-          if (el('setTwAccessToken')) el('setTwAccessToken').placeholder = (m.TWITTER_ACCESS_TOKEN && m.TWITTER_ACCESS_TOKEN.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN.value) : 'TWITTER_ACCESS_TOKEN (empty)';
-          if (el('setTwAccessTokenSecret')) el('setTwAccessTokenSecret').placeholder = (m.TWITTER_ACCESS_TOKEN_SECRET && m.TWITTER_ACCESS_TOKEN_SECRET.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN_SECRET.value) : 'TWITTER_ACCESS_TOKEN_SECRET (empty)';
+          if (el('setTwApiSecret')) el('setTwApiSecret').placeholder = (m.TWITTER_API_SECRET && m.TWITTER_API_SECRET.hasValue) ? ('saved: ' + m.TWITTER_API_SECRET.value) : 'Consumer Key Secret (empty)';
+          if (el('setTwAccessToken')) el('setTwAccessToken').placeholder = (m.TWITTER_ACCESS_TOKEN && m.TWITTER_ACCESS_TOKEN.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN.value) : 'Access Token (empty)';
+          if (el('setTwAccessTokenSecret')) el('setTwAccessTokenSecret').placeholder = (m.TWITTER_ACCESS_TOKEN_SECRET && m.TWITTER_ACCESS_TOKEN_SECRET.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN_SECRET.value) : 'Access Token Secret (empty)';
           if (el('setGeminiKey')) el('setGeminiKey').placeholder = (m.GEMINI_API_KEY && m.GEMINI_API_KEY.hasValue) ? ('saved: ' + m.GEMINI_API_KEY.value) : 'GEMINI_API_KEY (empty)';
 
           var tgState = (m.TELEGRAM_BOT_TOKEN && m.TELEGRAM_BOT_TOKEN.hasValue) ? 'saved' : 'empty';
