@@ -87,32 +87,6 @@ def _build_context_hashtags(*, title: str, description: str, body: str, max_tags
         'есть','быть','вам','ваш','ваша','ваши','мы','они','она','оно','также','только','очень','через','после','перед','где','который'
     }
 
-    phrase_map = [
-        ('my ugc studio', 'MyUGCStudio'),
-        ('tiktok', 'TikTokAds'),
-        ('shopify', 'Shopify'),
-        ('dropshipping', 'Dropshipping'),
-        ('amazon fba', 'AmazonFBA'),
-        ('fba', 'AmazonFBA'),
-        ('ugc', 'UGC'),
-        ('ecommerce', 'Ecommerce'),
-        ('e commerce', 'Ecommerce'),
-        ('content', 'ContentMarketing'),
-        ('seo', 'SEO'),
-        ('geo', 'GEO'),
-        ('localization', 'Localization'),
-        ('ai', 'AI'),
-        ('automation', 'Automation'),
-        ('conversion', 'ConversionRate'),
-        ('ads', 'PerformanceMarketing'),
-        ('video', 'VideoMarketing'),
-        ('wine', 'Wine'),
-        ('winery', 'Winery'),
-        ('vineyard', 'Vineyard'),
-        ('sommelier', 'Sommelier'),
-    ]
-
-    base = f" {(title or '').lower()} {(description or '').lower()} {(body or '').lower()} "
     tags: list[str] = []
     seen: set[str] = set()
 
@@ -120,18 +94,11 @@ def _build_context_hashtags(*, title: str, description: str, body: str, max_tags
         key = tag.lower()
         if key in seen:
             return
+        clean = re.sub(r'[^A-Za-z0-9_]', '', tag)
+        if not clean:
+            return
         seen.add(key)
-        tags.append('#' + re.sub(r'[^A-Za-z0-9_]', '', tag))
-
-    for needle, tag in phrase_map:
-        if ' ' in needle:
-            matched = needle in base
-        else:
-            matched = re.search(rf'(?<![a-zа-яё0-9]){re.escape(needle)}(?![a-zа-яё0-9])', base) is not None
-        if matched:
-            add(tag)
-        if len(tags) >= max_tags:
-            return tags[:max_tags]
+        tags.append('#' + clean)
 
     freq: dict[str, int] = {}
     for t in tokens:
@@ -151,10 +118,17 @@ def _build_context_hashtags(*, title: str, description: str, body: str, max_tags
         if len(tags) >= max_tags:
             break
 
+    # Last-resort dynamic fallback from title tokens only (no static tag set).
     if not tags:
-        tags = ['#Marketing', '#Content', '#AI', '#Ecommerce']
+        for t in _tokenize_for_tags(title or ''):
+            if len(t) < 4 or t in stop:
+                continue
+            add(t.capitalize())
+            if len(tags) >= max_tags:
+                break
 
     return tags[:max_tags]
+
 
 
 def _strip_hashtag_tail(text: str) -> str:
@@ -413,8 +387,9 @@ def build_linkedin_post(
     suffix = ("\n\n" + url) if (include_link and url) else ""
     target = max_total - len(suffix)
 
-    # Enforce practical depth so LinkedIn posts are not tiny one-liners.
-    min_len = min(target - 120, max(1600, int(target * 0.55)))
+    # Prompt asks for richer output, validator is more tolerant.
+    prompt_min_len = 1650
+    min_len = 1259
 
     def _normalize_text(txt: str) -> str:
         txt = (txt or "")
@@ -448,7 +423,7 @@ def build_linkedin_post(
             "- 3-6 hashtags.\n"
             "Hard constraints:\n"
             "- Preserve all important factual points from SOURCE in your own wording.\n"
-            f"- Length must be between {min_len} and {target} characters.\n"
+            f"- Length must be between {prompt_min_len} and {target} characters.\n"
             "- Do NOT reference the words 'blog', 'article', or 'link' unless include_link=true.\n"
             "- Return only final post text."
         )
