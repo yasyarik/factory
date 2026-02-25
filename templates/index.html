@@ -429,7 +429,7 @@
               <div class="row" style="margin-top:4px;">
                 <label class="pill"><input type="checkbox" id="clrLiClientSecret" /> clear LI secret</label>
                 <label class="pill"><input type="checkbox" id="clrTgToken" /> clear TG token</label>
-                <label class="pill"><input type="checkbox" id="clrTwToken" /> clear X bearer</label>
+                <label class="pill"><input type="checkbox" id="clrTwToken" /> clear all X credentials</label>
                 <label class="pill"><input type="checkbox" id="clrTwApiSecret" /> clear X API secret</label>
                 <label class="pill"><input type="checkbox" id="clrTwAccessToken" /> clear X access token</label>
                 <label class="pill"><input type="checkbox" id="clrTwAccessTokenSecret" /> clear X access token secret</label>
@@ -642,7 +642,13 @@
         var clear = [];
         if (el('clrLiClientSecret') && el('clrLiClientSecret').checked) clear.push('LINKEDIN_CLIENT_SECRET');
         if (el('clrTgToken') && el('clrTgToken').checked) clear.push('TELEGRAM_BOT_TOKEN');
-        if (el('clrTwToken') && el('clrTwToken').checked) clear.push('TWITTER_BEARER_TOKEN');
+        if (el('clrTwToken') && el('clrTwToken').checked) {
+          clear.push('TWITTER_BEARER_TOKEN');
+          clear.push('TWITTER_API_KEY');
+          clear.push('TWITTER_API_SECRET');
+          clear.push('TWITTER_ACCESS_TOKEN');
+          clear.push('TWITTER_ACCESS_TOKEN_SECRET');
+        }
         if (el('clrTwApiSecret') && el('clrTwApiSecret').checked) clear.push('TWITTER_API_SECRET');
         if (el('clrTwAccessToken') && el('clrTwAccessToken').checked) clear.push('TWITTER_ACCESS_TOKEN');
         if (el('clrTwAccessTokenSecret') && el('clrTwAccessTokenSecret').checked) clear.push('TWITTER_ACCESS_TOKEN_SECRET');
