@@ -60,7 +60,7 @@ def extract_article_image_urls_for_x(*, content_html: str, page_url: str, max_im
     return _extract_image_urls(content_html or "", page_url or "https://myugc.studio/", max_images=max_images)
 
 
-def build_twitter_thread_ru(*, title: str, description: str, content_html: str, url: str, max_posts: int = 4) -> list[str]:
+def build_twitter_thread_ru(*, title: str, description: str, content_html: str, url: str, include_link: bool = False, max_posts: int = 1) -> list[str]:
     body = _strip_html_to_text(content_html)
     body = _truncate(body, 7000)
 
@@ -70,11 +70,10 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
     if api_key:
         prompt = (
             "Сделай публикацию для X на русском по статье. "
-            "Формат: 1-3 поста (лучше 1-2). "
-            "Первый пост = короткое саммари статьи до 240 символов, четкая польза и вывод. "
-            "Если есть второй/третий пост — только конкретные инсайты/цифры, без воды. "
+            "Формат: РОВНО 1 пост. "
+            "Сделай короткое саммари статьи до 240 символов, четкая польза и вывод. "
             "Без выдуманных брендов. Если уместно упомяни My UGC Studio. "
-            "Верни JSON: {\"tweets\":[\"...\",\"...\"]}."
+            "Верни JSON: {\"tweets\":[\"...\"]}."
         )
         user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\nURL:{url}"
         gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -91,17 +90,12 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
                 obj = json.loads(txt)
                 tw = obj.get("tweets") if isinstance(obj, dict) else None
                 if isinstance(tw, list) and tw:
-                    out = []
-                    for t in tw[:max_posts]:
-                        if not isinstance(t, str):
-                            continue
-                        t = _truncate(t.replace("\r", "").strip(), 260)
-                        if t:
-                            out.append(t)
-                    if out:
-                        if url:
-                            out[-1] = _truncate(out[-1], 230) + "\n" + url
-                        return out
+                    first = next((x for x in tw if isinstance(x, str) and x.strip()), "").strip()
+                    if first:
+                        first = _truncate(first.replace("\r", ""), 260)
+                        if include_link and url:
+                            first = _truncate(first, 230) + "\n" + url
+                        return [first]
         except Exception:
             pass
 
@@ -111,7 +105,7 @@ def build_twitter_thread_ru(*, title: str, description: str, content_html: str, 
     first = _truncate((title or "").strip(), 220)
     if description:
         first = _truncate(f"{first}: {description}", 240)
-    return [f"{first}\n{url}"] if url else [first]
+    return [f"{first}\n{url}"] if (include_link and url) else [first]
 
 
 def _pct(s: str) -> str:

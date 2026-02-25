@@ -2919,7 +2919,7 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
                 elif ch == "telegram":
                     telegram_publish(job_id, {"includeLink": bool(settings.get("telegram_include_link"))})
                 elif ch == "twitter":
-                    twitter_publish(job_id, {})
+                    twitter_publish(job_id, {"includeLink": bool(settings.get("telegram_include_link"))})
                 else:
                     continue
 
@@ -3615,13 +3615,14 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
         raise HTTPException(status_code=400, detail="Missing slug")
 
     url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+    include_link = bool(payload.get("includeLink", False))
 
     with db_connect(DB_PATH) as conn:
         conn.execute(
             "UPDATE jobs SET twitter_status='POSTING', twitter_error=NULL, updated_at=? WHERE id=?",
             (utcnow_iso(), job_id),
         )
-    log_event(DB_PATH, job_id, "INFO", "X/Twitter thread posting started")
+    log_event(DB_PATH, job_id, "INFO", "X/Twitter posting started")
 
     import threading
 
@@ -3632,7 +3633,8 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
                 description=description or "",
                 content_html=draft_html or "",
                 url=url,
-                max_posts=6,
+                include_link=include_link,
+                max_posts=1,
             )
             media_urls = extract_article_image_urls_for_x(content_html=draft_html or "", page_url=url, max_images=4)
             out = twitter_post_thread(access_token=access_token, tweets=tweets, oauth1=(oauth1 if has_oauth1 else None), media_urls=media_urls)
@@ -3652,7 +3654,7 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
                 remote_url=post_url,
                 status="POSTED",
             )
-            log_event(DB_PATH, job_id, "READY", "Posted X/Twitter thread")
+            log_event(DB_PATH, job_id, "READY", "Posted to X/Twitter")
         except Exception as e:
             msg = f"X/Twitter publish failed: {e}"
             with db_connect(DB_PATH) as conn:

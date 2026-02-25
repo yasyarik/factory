@@ -287,7 +287,7 @@
               <input id="tgChatId" style="width: 280px" placeholder="Telegram chat id override (optional)" />
               <label class="pill"><input type="checkbox" id="tgIncludeLink" /> Include link</label>
             </div>
-            <div class="muted" style="margin-top: 10px;">Telegram posts are auto-adapted to RU. X publishes as thread.</div>
+            <div class="muted" style="margin-top: 10px;">Telegram posts are auto-adapted to RU. X posts one summary with up to 4 article images. The same Include link checkbox controls both Telegram and X.</div>
           </div>
         </div>
 
@@ -826,11 +826,12 @@
       }
 
       async function twitterPublish(jobId) {
+        var includeLink = !!(el('tgIncludeLink') && el('tgIncludeLink').checked);
         try {
           var out = await api('/api/jobs/' + encodeURIComponent(jobId) + '/twitter/publish', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({})
+            body: JSON.stringify({ includeLink: includeLink })
           });
           if (out && out.success) {
             schedulePoll();
