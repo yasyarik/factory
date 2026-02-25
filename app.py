@@ -3194,6 +3194,11 @@ async def settings_social_put(request: Request):
     if "GEMINI_IMAGE_MODEL" in clears:
         clears.add("GEMINI_MODEL_IMAGE")
 
+    # clear has priority over update when both are provided
+    for k in list(updates.keys()):
+        if k in clears:
+            updates.pop(k, None)
+
     _env_write_updates(ENV_PATH, updates, clears)
 
     for k in clears:

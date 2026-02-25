@@ -411,9 +411,6 @@
                 <input id="setTgChatId" style="flex:1; min-width:240px" placeholder="TELEGRAM_CHAT_ID" />
               </div>
               <div class="row">
-                <input id="setTwToken" style="flex:1; min-width:260px" placeholder="TWITTER_BEARER_TOKEN (OAuth2 user token, optional)" />
-              </div>
-              <div class="row">
                 <input id="setTwApiKey" style="flex:1; min-width:220px" placeholder="TWITTER_API_KEY (OAuth1 Consumer Key)" />
                 <input id="setTwApiSecret" style="flex:1; min-width:220px" placeholder="TWITTER_API_SECRET" />
               </div>
@@ -430,9 +427,6 @@
                 <label class="pill"><input type="checkbox" id="clrLiClientSecret" /> clear LI secret</label>
                 <label class="pill"><input type="checkbox" id="clrTgToken" /> clear TG token</label>
                 <label class="pill"><input type="checkbox" id="clrTwToken" /> clear all X credentials</label>
-                <label class="pill"><input type="checkbox" id="clrTwApiSecret" /> clear X API secret</label>
-                <label class="pill"><input type="checkbox" id="clrTwAccessToken" /> clear X access token</label>
-                <label class="pill"><input type="checkbox" id="clrTwAccessTokenSecret" /> clear X access token secret</label>
                 <label class="pill"><input type="checkbox" id="clrGeminiKey" /> clear Gemini key</label>
               </div>
               <div class="row" style="margin-top:4px;">
@@ -594,7 +588,6 @@
 
           if (el('setLiClientSecret')) el('setLiClientSecret').placeholder = (m.LINKEDIN_CLIENT_SECRET && m.LINKEDIN_CLIENT_SECRET.hasValue) ? ('saved: ' + m.LINKEDIN_CLIENT_SECRET.value) : 'LINKEDIN_CLIENT_SECRET (empty)';
           if (el('setTgToken')) el('setTgToken').placeholder = (m.TELEGRAM_BOT_TOKEN && m.TELEGRAM_BOT_TOKEN.hasValue) ? ('saved: ' + m.TELEGRAM_BOT_TOKEN.value) : 'TELEGRAM_BOT_TOKEN (empty)';
-          if (el('setTwToken')) el('setTwToken').placeholder = (m.TWITTER_BEARER_TOKEN && m.TWITTER_BEARER_TOKEN.hasValue) ? ('saved: ' + m.TWITTER_BEARER_TOKEN.value) : 'TWITTER_BEARER_TOKEN (empty)';
           if (el('setTwApiSecret')) el('setTwApiSecret').placeholder = (m.TWITTER_API_SECRET && m.TWITTER_API_SECRET.hasValue) ? ('saved: ' + m.TWITTER_API_SECRET.value) : 'TWITTER_API_SECRET (empty)';
           if (el('setTwAccessToken')) el('setTwAccessToken').placeholder = (m.TWITTER_ACCESS_TOKEN && m.TWITTER_ACCESS_TOKEN.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN.value) : 'TWITTER_ACCESS_TOKEN (empty)';
           if (el('setTwAccessTokenSecret')) el('setTwAccessTokenSecret').placeholder = (m.TWITTER_ACCESS_TOKEN_SECRET && m.TWITTER_ACCESS_TOKEN_SECRET.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN_SECRET.value) : 'TWITTER_ACCESS_TOKEN_SECRET (empty)';
@@ -625,7 +618,6 @@
 
         var liSecret = (el('setLiClientSecret') && el('setLiClientSecret').value || '').trim();
         var tgToken = (el('setTgToken') && el('setTgToken').value || '').trim();
-        var twToken = (el('setTwToken') && el('setTwToken').value || '').trim();
         var twApiSecret = (el('setTwApiSecret') && el('setTwApiSecret').value || '').trim();
         var twAccessToken = (el('setTwAccessToken') && el('setTwAccessToken').value || '').trim();
         var twAccessTokenSecret = (el('setTwAccessTokenSecret') && el('setTwAccessTokenSecret').value || '').trim();
@@ -633,7 +625,6 @@
 
         if (liSecret) values.LINKEDIN_CLIENT_SECRET = liSecret;
         if (tgToken) values.TELEGRAM_BOT_TOKEN = tgToken;
-        if (twToken) values.TWITTER_BEARER_TOKEN = twToken;
         if (twApiSecret) values.TWITTER_API_SECRET = twApiSecret;
         if (twAccessToken) values.TWITTER_ACCESS_TOKEN = twAccessToken;
         if (twAccessTokenSecret) values.TWITTER_ACCESS_TOKEN_SECRET = twAccessTokenSecret;
@@ -649,9 +640,6 @@
           clear.push('TWITTER_ACCESS_TOKEN');
           clear.push('TWITTER_ACCESS_TOKEN_SECRET');
         }
-        if (el('clrTwApiSecret') && el('clrTwApiSecret').checked) clear.push('TWITTER_API_SECRET');
-        if (el('clrTwAccessToken') && el('clrTwAccessToken').checked) clear.push('TWITTER_ACCESS_TOKEN');
-        if (el('clrTwAccessTokenSecret') && el('clrTwAccessTokenSecret').checked) clear.push('TWITTER_ACCESS_TOKEN_SECRET');
         if (el('clrGeminiKey') && el('clrGeminiKey').checked) clear.push('GEMINI_API_KEY');
 
         try {
@@ -664,7 +652,6 @@
 
           if (el('setLiClientSecret')) el('setLiClientSecret').value = '';
           if (el('setTgToken')) el('setTgToken').value = '';
-          if (el('setTwToken')) el('setTwToken').value = '';
           if (el('setTwApiSecret')) el('setTwApiSecret').value = '';
           if (el('setTwAccessToken')) el('setTwAccessToken').value = '';
           if (el('setTwAccessTokenSecret')) el('setTwAccessTokenSecret').value = '';
@@ -672,9 +659,6 @@
           if (el('clrLiClientSecret')) el('clrLiClientSecret').checked = false;
           if (el('clrTgToken')) el('clrTgToken').checked = false;
           if (el('clrTwToken')) el('clrTwToken').checked = false;
-          if (el('clrTwApiSecret')) el('clrTwApiSecret').checked = false;
-          if (el('clrTwAccessToken')) el('clrTwAccessToken').checked = false;
-          if (el('clrTwAccessTokenSecret')) el('clrTwAccessTokenSecret').checked = false;
           if (el('clrGeminiKey')) el('clrGeminiKey').checked = false;
 
           await loadSocialSettings();
