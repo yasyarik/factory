@@ -73,6 +73,7 @@ LOCALES = ("ru", "es", "de", "fr")
 
 CATEGORY_CANONICAL = (
     "Wineries & Travel",
+
     "Wine Regions",
     "Grape Varieties",
     "Food Pairing",
@@ -169,6 +170,13 @@ SITE_ENV_KEYS = {
     "SITE_CTA_TEXT",
     "SITE_CTA_BUTTON_TEXT",
     "SITE_CTA_BUTTON_URL",
+    "SITE_CONTEXT",
+    "SITE_SUBTOPICS",
+    "SITE_BG_COLOR",
+    "SITE_BG_ANIMATION",
+    "SITE_BG_ANIMATION_SPEED",
+    "SITE_ACCENT_COLOR",
+    "SITE_ENABLED_LANGS",
 }
 
 
@@ -204,6 +212,49 @@ def _site_origin() -> str:
     if not raw:
         raw = "https://myugc.studio"
     return raw.rstrip("/")
+
+
+
+def _site_context() -> str:
+    raw = (os.environ.get("SITE_CONTEXT") or "").strip()
+    return raw or "Wine culture, tasting, wine regions, wineries, food pairing, and buying guidance"
+
+
+def _optimize_site_images() -> None:
+    """Best-effort image optimization in landing repo (creates .webp variants)."""
+    try:
+        subprocess.check_call(["node", "scripts/optimize-images.js"], cwd=LANDING_DIR)
+    except Exception:
+        pass
+
+
+def _site_subtopics() -> list[str]:
+    raw = (os.environ.get("SITE_SUBTOPICS") or "").strip()
+    if not raw:
+        return ["wine travel", "food pairing", "wineries", "grape varieties"]
+    parts = re.split(r"[,\n;|]+", raw)
+    out: list[str] = []
+    seen: set[str] = set()
+    for p in parts:
+        x = re.sub(r"\s+", " ", (p or "").strip())
+        if not x:
+            continue
+        k = x.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x)
+    return out or ["wine travel", "food pairing", "wineries", "grape varieties"]
+
+
+def _rotate_discovery_direction() -> str:
+    ctx = _site_context()
+    subs = _site_subtopics()
+    if not subs:
+        return ctx
+    idx = int(datetime.now(timezone.utc).strftime("%j")) % len(subs)
+    return f"{ctx}: {subs[idx]}"
+
 
 def _gsc_site_url() -> str:
     raw = (os.environ.get("GSC_SITE_URL") or "").strip()
@@ -375,7 +426,7 @@ def _translate_post_payload(
             "Translate naturally, keep meaning and structure.",
             "All human-readable output must be in target language, except product/brand names and technical acronyms.",
             "Do not leave title/description/body in English when target language is not English.",
-            "Do NOT translate brand name 'My UGC Studio'.",
+            "Do not translate brand names or product names.",
             "Keep all links, image src, filenames, and URLs unchanged.",
             "Keep valid HTML. Preserve tags and heading hierarchy.",
             "Return STRICT JSON only.",
@@ -408,25 +459,47 @@ def _translate_post_payload(
         headers={"content-type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=180) as resp:
-        raw = json.loads(resp.read().decode("utf-8"))
+    def _norm_text(s: str) -> str:
+        return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
-    text = (((raw.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text") or ""
-    text = re.sub(r"^```(?:json)?\s*", "", text.strip())
-    text = re.sub(r"\s*```$", "", text)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        text = text[start:end + 1]
-    out = json.loads(text)
+    last_err: Exception | None = None
+    for _attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=180) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
 
-    return {
-        "title": (out.get("title") or title).strip(),
-        "description": (out.get("description") or description).strip(),
-        "category": (out.get("category") or category).strip() or category,
-        "contentHtml": out.get("contentHtml") or content_html,
-        "faq": out.get("faq") if isinstance(out.get("faq"), list) else faq,
-    }
+            text = (((raw.get("candidates") or [{}])[0].get("content") or {}).get("parts") or [{}])[0].get("text") or ""
+            text = re.sub(r"^```(?:json)?\s*", "", text.strip())
+            text = re.sub(r"\s*```$", "", text)
+            start = text.find("{")
+            end = text.rfind("}")
+            if start >= 0 and end > start:
+                text = text[start:end + 1]
+            out = json.loads(text)
+
+            tr_title = (out.get("title") or title).strip()
+            tr_desc = (out.get("description") or description).strip()
+            tr_cat = (out.get("category") or category).strip() or category
+            tr_html = out.get("contentHtml") or content_html
+            tr_faq = out.get("faq") if isinstance(out.get("faq"), list) else faq
+
+            if locale != "en":
+                same_title = _norm_text(tr_title) == _norm_text(title)
+                same_desc = _norm_text(tr_desc) == _norm_text(description)
+                if same_title and same_desc:
+                    raise ValueError("translation looks unchanged from EN source")
+
+            return {
+                "title": tr_title,
+                "description": tr_desc,
+                "category": tr_cat,
+                "contentHtml": tr_html,
+                "faq": tr_faq,
+            }
+        except Exception as e:
+            last_err = e
+            continue
+    raise RuntimeError(f"translation failed after retries: {last_err}")
 
 
 def _save_social_post(
@@ -516,7 +589,15 @@ def _load_dotenv(dotenv_path: str) -> None:
                 v = v.strip()
                 if len(v) >= 2 and (v[0] == v[-1]) and (v[0] in ("\"", "'")):
                     v = v[1:-1]
-                if k and ((k not in os.environ) or not (os.environ.get(k) or "").strip()):
+                # Always override site-specific keys from local .env for this factory instance.
+                force_keys = {
+                    "LANDING_DIR",
+                    "SITE_ORIGIN",
+                    "GSC_SITE_URL",
+                    "GSC_CREDENTIALS_FILE",
+                    "GSC_ENABLED",
+                }
+                if k and (k in force_keys or (k not in os.environ) or not (os.environ.get(k) or "").strip()):
                     os.environ[k] = v
     except Exception:
         # Never fail startup on env parsing.
@@ -601,6 +682,446 @@ def _env_write_updates(path: str, updates: dict[str, str], clears: set[str]) -> 
 
     with open(path, "w", encoding="utf-8") as f:
         f.writelines(out_lines)
+
+
+def _sanitize_hex_color(value: str | None, default: str = "#12070c") -> str:
+    raw = (value or "").strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", raw):
+        return raw.lower()
+    if re.fullmatch(r"[0-9a-fA-F]{6}", raw):
+        return ("#" + raw).lower()
+    return default
+
+
+def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
+    h = _sanitize_hex_color(hex_color).lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _mix_rgb(a: tuple[int, int, int], b: tuple[int, int, int], t: float) -> tuple[int, int, int]:
+    t = max(0.0, min(1.0, float(t)))
+    return (
+        int(round(a[0] + (b[0] - a[0]) * t)),
+        int(round(a[1] + (b[1] - a[1]) * t)),
+        int(round(a[2] + (b[2] - a[2]) * t)),
+    )
+
+
+def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
+    return "#%02x%02x%02x" % rgb
+
+
+
+def _rgba(rgb: tuple[int, int, int], alpha: float) -> str:
+    a = max(0.0, min(1.0, float(alpha)))
+    return f"rgba({rgb[0]},{rgb[1]},{rgb[2]},{a:.2f})"
+
+
+def _sanitize_bg_animation(value: str | None) -> str:
+    v = (value or "").strip().lower()
+    allowed = {"wine", "aurora", "sunset", "minimal"}
+    return v if v in allowed else "wine"
+
+
+def _sanitize_bg_speed(value: str | None, default: int = 34) -> int:
+    try:
+        n = int(str(value or "").strip())
+    except Exception:
+        n = default
+    return max(8, min(120, n))
+
+
+
+
+def _pick_theme_profile(context: str, subtopics: list[str]) -> str:
+    text = ((context or "") + " " + " ".join(subtopics or [])).lower()
+    if re.search(r"\b(wine|sommel|vineyard|grape|winery|cellar|pairing|rioja|bordeaux|burgundy|tuscany)\b", text):
+        return "wine"
+    if re.search(r"\b(ai|artificial intelligence|automation|agent|llm|prompt|model|machine learning|ml|tech|software|saas)\b", text):
+        return "ai"
+    if re.search(r"\b(travel|tour|trip|route|itinerary|destination|hotel|flight)\b", text):
+        return "travel"
+    if re.search(r"\b(ecommerce|shopify|dropshipping|conversion|product page|ads|ugc|marketing)\b", text):
+        return "ecommerce"
+    return "generic"
+
+
+def _theme_pulse_values(profile: str, primary_subtopic: str = "") -> list[dict[str, Any]]:
+    st = (primary_subtopic or "").strip().lower()
+    if profile == "wine":
+        if "travel" in st or "route" in st or "wineries" in st:
+            return [
+                {"value": 62, "suffix": "M"},
+                {"value": 5.7, "suffix": "K"},
+                {"value": 4.2, "suffix": "D"},
+                {"value": 29, "suffix": "%"},
+            ]
+        if "pair" in st or "food" in st:
+            return [
+                {"value": 35, "suffix": "%"},
+                {"value": 22, "suffix": "%"},
+                {"value": 3.1, "suffix": "x"},
+                {"value": 17, "suffix": "%"},
+            ]
+        if "grape" in st or "variet" in st:
+            return [
+                {"value": 10000, "suffix": "+"},
+                {"value": 1200, "suffix": "+"},
+                {"value": 8.4, "suffix": "K"},
+                {"value": 26, "suffix": "%"},
+            ]
+        if "buy" in st or "guide" in st:
+            return [
+                {"value": 41, "suffix": "%"},
+                {"value": 63, "suffix": "%"},
+                {"value": 2.6, "suffix": "x"},
+                {"value": 19, "suffix": "%"},
+            ]
+        return [
+            {"value": 62, "suffix": "M"},
+            {"value": 11.3, "suffix": "B"},
+            {"value": 35, "suffix": "%"},
+            {"value": 18, "suffix": "%"},
+        ]
+
+    m = {
+        "ai": [
+            {"value": 47, "suffix": "%"},
+            {"value": 9.8, "suffix": "B"},
+            {"value": 28, "suffix": "%"},
+            {"value": 31, "suffix": "%"},
+        ],
+        "travel": [
+            {"value": 74, "suffix": "M"},
+            {"value": 13.6, "suffix": "B"},
+            {"value": 41, "suffix": "%"},
+            {"value": 22, "suffix": "%"},
+        ],
+        "ecommerce": [
+            {"value": 58, "suffix": "%"},
+            {"value": 6.9, "suffix": "B"},
+            {"value": 33, "suffix": "%"},
+            {"value": 24, "suffix": "%"},
+        ],
+        "generic": [
+            {"value": 49, "suffix": "%"},
+            {"value": 7.4, "suffix": "B"},
+            {"value": 27, "suffix": "%"},
+            {"value": 16, "suffix": "%"},
+        ],
+    }
+    return m.get(profile, m["generic"])
+
+
+def _theme_pulse_texts(profile: str, locale: str = "en", primary_subtopic: str = "") -> list[dict[str, str]]:
+    st = (primary_subtopic or "").strip().lower()
+    L = (locale or "en").lower()
+
+    base_en = {
+        "wine_default": [
+            {"label":"Global wine tourists / year","meta":"Source blend: OIV + UN Tourism estimates"},
+            {"label":"Annual sparkling wine market (USD)","meta":"Rounded industry estimate"},
+            {"label":"Buyers choosing by food pairing","meta":"Consumer trend studies"},
+            {"label":"Growth in no/low alcohol segment","meta":"YoY category trend"},
+        ],
+        "wine_travel": [
+            {"label":"Wine-route travelers / year","meta":"Tourism boards + destination estimates"},
+            {"label":"Active winery destinations","meta":"Major mapped wine destinations"},
+            {"label":"Avg route length","meta":"Multi-day itinerary benchmark"},
+            {"label":"Travelers adding tasting stops","meta":"Trip planning behavior"},
+        ],
+        "wine_pairing": [
+            {"label":"Shoppers guided by pairing","meta":"Meal-first buying behavior"},
+            {"label":"Higher order value with pairing","meta":"Basket uplift estimate"},
+            {"label":"Conversion lift with pairing cards","meta":"Site UX benchmark"},
+            {"label":"Repeat buyers from pairing content","meta":"Retention trend"},
+        ],
+        "wine_grape": [
+            {"label":"Documented grape varieties","meta":"Viticulture reference sources"},
+            {"label":"Commercial wine grapes","meta":"Global production varieties"},
+            {"label":"Major appellations","meta":"Regional designation datasets"},
+            {"label":"Readers preferring grape-led guides","meta":"Content preference trend"},
+        ],
+        "wine_buy": [
+            {"label":"Buyers checking guides before purchase","meta":"Decision behavior trend"},
+            {"label":"Consumers comparing labels in-store","meta":"Shelf behavior estimate"},
+            {"label":"Conversion lift from buying guides","meta":"Editorial benchmark"},
+            {"label":"Returns reduced by expectation matching","meta":"Post-purchase quality fit"},
+        ],
+        "ai": [
+            {"label":"Teams using AI weekly","meta":"Adoption pulse"},
+            {"label":"AI software market (USD)","meta":"Rounded market estimate"},
+            {"label":"Workflows automated end-to-end","meta":"Ops trend"},
+            {"label":"Cycle time reduction","meta":"Productivity benchmark"},
+        ],
+        "travel": [
+            {"label":"Travelers planning routes online","meta":"Global planning behavior"},
+            {"label":"Travel experiences market (USD)","meta":"Rounded estimate"},
+            {"label":"Users preferring local guides","meta":"Search intent trend"},
+            {"label":"Growth in curated itineraries","meta":"YoY trend"},
+        ],
+        "ecommerce": [
+            {"label":"Stores investing in content-led growth","meta":"Commerce benchmark"},
+            {"label":"Creator-commerce market (USD)","meta":"Rounded estimate"},
+            {"label":"Teams running weekly experiments","meta":"Optimization rhythm"},
+            {"label":"Lower CAC from better creative ops","meta":"Performance trend"},
+        ],
+        "generic": [
+            {"label":"Audience growth from useful content","meta":"Editorial baseline"},
+            {"label":"Niche media market size (USD)","meta":"Rounded estimate"},
+            {"label":"Readers returning monthly","meta":"Loyalty trend"},
+            {"label":"Faster publishing velocity","meta":"Workflow improvement"},
+        ]
+    }
+
+    key = profile
+    if profile == "wine":
+        if "travel" in st or "route" in st or "wineries" in st:
+            key = "wine_travel"
+        elif "pair" in st or "food" in st:
+            key = "wine_pairing"
+        elif "grape" in st or "variet" in st:
+            key = "wine_grape"
+        elif "buy" in st or "guide" in st:
+            key = "wine_buy"
+        else:
+            key = "wine_default"
+
+    en = base_en.get(key, base_en["generic"])
+    if L == "en":
+        return en
+
+    trans = {
+      "ru": {
+        "wine_default":[
+          {"label":"Винные туристы в мире / год","meta":"Оценки OIV и UN Tourism"},
+          {"label":"Рынок игристых вин (USD)","meta":"Округленная оценка"},
+          {"label":"Покупатели, выбирающие по фуд-пейрингу","meta":"Потребительский тренд"},
+          {"label":"Рост сегмента no/low alcohol","meta":"Год к году"},
+        ]
+      },
+      "es": {
+        "wine_default":[
+          {"label":"Turistas del vino en el mundo / año","meta":"Estimaciones OIV + UN Tourism"},
+          {"label":"Mercado anual de espumosos (USD)","meta":"Estimación redondeada"},
+          {"label":"Compradores que eligen por maridaje","meta":"Tendencia de consumo"},
+          {"label":"Crecimiento en no/low alcohol","meta":"Tendencia interanual"},
+        ]
+      },
+      "de": {
+        "wine_default":[
+          {"label":"Weintouristen weltweit / Jahr","meta":"Schätzung aus OIV + UN Tourism"},
+          {"label":"Jährlicher Schaumweinmarkt (USD)","meta":"Gerundete Schätzung"},
+          {"label":"Käufer mit Fokus auf Food Pairing","meta":"Konsumententrend"},
+          {"label":"Wachstum no/low alcohol Segment","meta":"Jahrestrend"},
+        ]
+      },
+      "fr": {
+        "wine_default":[
+          {"label":"Œnotouristes dans le monde / an","meta":"Estimations OIV + UN Tourism"},
+          {"label":"Marché annuel des vins effervescents (USD)","meta":"Estimation arrondie"},
+          {"label":"Acheteurs guidés par l'accord mets-vins","meta":"Tendance consommateurs"},
+          {"label":"Croissance du segment no/low alcohol","meta":"Tendance annuelle"},
+        ]
+      }
+    }
+    loc = trans.get(L, {})
+    arr = loc.get(key) or loc.get('wine_default') or en
+    if len(arr) < 4:
+        arr = (arr + en)[:4]
+    return arr
+
+
+def _apply_pulse_profile_to_landing() -> dict[str, Any]:
+    ctx = _site_context()
+    subs = _site_subtopics()
+    primary = (subs[0] if subs else "")
+    profile = _pick_theme_profile(ctx, subs)
+
+    files = [("en", os.path.join(LANDING_DIR, "index.html"))]
+    for loc in LOCALES:
+        files.append((loc, os.path.join(LANDING_DIR, loc, "index.html")))
+
+    changed = 0
+    scanned = 0
+    values = _theme_pulse_values(profile, primary)
+    for loc, p in files:
+        if not os.path.exists(p):
+            continue
+        scanned += 1
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                src = f.read()
+        except Exception:
+            continue
+
+        items = []
+        texts = _theme_pulse_texts(profile, loc, primary)
+        for i in range(4):
+            v = values[i] if i < len(values) else {"value": 0, "suffix": ""}
+            t = texts[i] if i < len(texts) else {"label": "", "meta": ""}
+            items.append({"value": v.get("value"), "suffix": v.get("suffix"), "label": t.get("label"), "meta": t.get("meta")})
+        line = "window.__PULSE_ITEMS = " + json.dumps(items, ensure_ascii=False) + ";"
+
+        if "window.__PULSE_ITEMS" in src:
+            new = re.sub(r"window\.__PULSE_ITEMS\s*=\s*[^;]*;", line, src, count=1)
+        else:
+            anchor = "function renderWineStats(){"
+            if anchor in src:
+                new = src.replace(anchor, line + "\n\n    " + anchor, 1)
+            else:
+                continue
+
+        if new != src:
+            try:
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(new)
+                changed += 1
+            except Exception:
+                pass
+
+    return {"ok": True, "profile": profile, "primary": primary, "values": values, "scanned": scanned, "changed": changed}
+
+
+def _build_theme_override_css(bg_color: str, animation: str, speed: int, accent_color: str) -> str:
+    base = _hex_to_rgb(bg_color)
+    dark = _mix_rgb(base, (0, 0, 0), 0.35)
+    mid = base
+    light = _mix_rgb(base, (255, 255, 255), 0.22)
+
+    if animation == "aurora":
+        r1, r2, r3 = (56, 189, 248), (168, 85, 247), (34, 197, 94)
+    elif animation == "sunset":
+        r1, r2, r3 = (251, 146, 60), (244, 63, 94), (245, 158, 11)
+    elif animation == "minimal":
+        r1, r2, r3 = _mix_rgb(base, (255, 255, 255), 0.1), _mix_rgb(base, (0, 0, 0), 0.1), _mix_rgb(base, (255, 255, 255), 0.2)
+    else:  # wine
+        r1, r2, r3 = _mix_rgb(base, (190, 24, 93), 0.55), _mix_rgb(base, (225, 29, 72), 0.35), _mix_rgb(base, (136, 19, 55), 0.45)
+
+    grad_dark = '#%02x%02x%02x' % dark
+    grad_mid = '#%02x%02x%02x' % mid
+    grad_light = '#%02x%02x%02x' % light
+    grad = f"linear-gradient(135deg, {_sanitize_hex_color(grad_dark)} 0%, {_sanitize_hex_color(grad_mid)} 50%, {_sanitize_hex_color(grad_light)} 100%)"
+    acc = _sanitize_hex_color(accent_color, "#b63a5a")
+    acc_hover = _sanitize_hex_color(_rgb_to_hex(_mix_rgb(_hex_to_rgb(acc), (0,0,0), 0.18)), "#962f49")
+
+    css = (
+        f":root {{\n"
+        f"  --bg-dark: {_sanitize_hex_color(bg_color)};\n"
+        f"  --bg-gradient: {grad};\n"
+        f"  --accent: {acc};\n"
+        f"  --accent-hover: {acc_hover};\n"
+        f"}}\n"
+        f"body {{ background: var(--bg-dark) !important; }}\n"
+        f".fixed-bg {{ background: var(--bg-gradient) !important; }}\n"
+        f".fixed-bg:before {{\n"
+        f"  background:\n"
+        f"    radial-gradient(circle at 18% 26%, {_rgba(r1, 0.62)} 0%, transparent 36%),\n"
+        f"    radial-gradient(circle at 82% 16%, {_rgba(r2, 0.44)} 0%, transparent 40%),\n"
+        f"    radial-gradient(circle at 50% 76%, {_rgba(r3, 0.58)} 0%, transparent 42%) !important;\n"
+        f"  background-size: 220% 220% !important;\n"
+        f"  animation: shift {int(speed)}s ease infinite !important;\n"
+        f"  will-change: background-position;\n"
+        f"}}\n"
+        f"@keyframes shift {{0%,100%{{background-position:0% 50%}}50%{{background-position:100% 50%}}}}"
+    )
+    return css
+
+
+def _apply_theme_override_to_file(path: str, css: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            src = f.read()
+    except Exception:
+        return False
+
+    block = f"<style id=\"site-theme-override\">\n{css}\n</style>"
+    if "<style id=\"site-theme-override\">" in src:
+        dst, n = re.subn(r"(?is)<style\s+id=\"site-theme-override\">.*?</style>", block, src, count=1)
+        if n <= 0:
+            return False
+    elif "</head>" in src:
+        dst = src.replace("</head>", block + "\n\n</head>", 1)
+    else:
+        return False
+
+    if dst == src:
+        return False
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(dst)
+        return True
+    except Exception:
+        return False
+
+
+def _apply_site_theme_to_landing() -> dict[str, Any]:
+    bg = _sanitize_hex_color((os.environ.get("SITE_BG_COLOR") or "").strip(), "#12070c")
+    anim = _sanitize_bg_animation((os.environ.get("SITE_BG_ANIMATION") or "").strip())
+    speed = _sanitize_bg_speed((os.environ.get("SITE_BG_ANIMATION_SPEED") or "").strip(), 34)
+    accent = _sanitize_hex_color((os.environ.get("SITE_ACCENT_COLOR") or "").strip(), "#b63a5a")
+    css = _build_theme_override_css(bg, anim, speed, accent)
+
+    changed = 0
+    scanned = 0
+    for root, _dirs, files in os.walk(LANDING_DIR):
+        for name in files:
+            if not name.endswith(".html"):
+                continue
+            path = os.path.join(root, name)
+            scanned += 1
+            if _apply_theme_override_to_file(path, css):
+                changed += 1
+
+    return {"scanned": scanned, "changed": changed, "bg": bg, "animation": anim, "speed": speed, "accent": accent}
+
+_SUPPORTED_SWITCHER_LANGS = ("en", "ru", "es", "de", "fr")
+
+
+def _normalize_enabled_languages(raw: str | None) -> list[str]:
+    tokens = re.split(r"[,;|\s]+", (raw or "").strip())
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        x = (t or "").strip().lower()
+        if x not in _SUPPORTED_SWITCHER_LANGS:
+            continue
+        if x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    if "en" not in seen:
+        out.insert(0, "en")
+    return out or ["en", "ru", "es", "de", "fr"]
+
+
+def _apply_enabled_languages_to_landing() -> dict[str, Any]:
+    langs = _normalize_enabled_languages((os.environ.get("SITE_ENABLED_LANGS") or "").strip())
+    js_path = os.path.join(LANDING_DIR, "i18n-switcher.js")
+    if not os.path.exists(js_path):
+        return {"ok": False, "error": f"switcher not found: {js_path}"}
+
+    try:
+        with open(js_path, "r", encoding="utf-8") as f:
+            src = f.read()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    new_supported = 'var supported = [' + ', '.join([f'"{x}"' for x in langs]) + '];'
+    src2, n = re.subn(r"var\s+supported\s*=\s*\[[^\]]*\];", new_supported, src, count=1)
+    if n == 0:
+        return {"ok": False, "error": "supported array not found in i18n-switcher.js"}
+
+    try:
+        with open(js_path, "w", encoding="utf-8") as f:
+            f.write(src2)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+    return {"ok": True, "languages": langs, "path": js_path}
+
 
 
 def _social_settings_snapshot() -> dict[str, Any]:
@@ -1081,34 +1602,6 @@ def _topic_is_queueable(topic: str) -> bool:
     return True
 
 
-
-
-def _synthetic_direction_topics(direction: str, count: int = 6) -> list[str]:
-    base = re.sub(r"\s+", " ", (direction or "").strip())
-    if not base:
-        return []
-    b = base[0].upper() + base[1:]
-    variants = [
-        f"{b}: practical workflow for Shopify stores in 2026",
-        f"How to scale {b} with AI without wasting ad budget in 2026?",
-        f"{b}: best prompts and QA checklist for high-converting creatives",
-        f"{b}: comparison of manual vs automated pipeline for ecommerce teams",
-        f"How to reduce CAC using {b} and UGC-style assets in 2026?",
-        f"{b}: 30-day content plan for product pages and paid ads",
-        f"{b}: common mistakes and how to fix them fast",
-        f"Can {b} increase conversion rate for dropshipping stores?",
-    ]
-    out=[]
-    seen=set()
-    for t in variants:
-        k=_topic_key(t)
-        if not k or k in seen:
-            continue
-        seen.add(k)
-        out.append(t)
-        if len(out)>=max(1,int(count or 1)):
-            break
-    return out
 def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] | None = None) -> dict[str, Any]:
     if not _TOPIC_DISCOVERY_LOCK.acquire(blocking=False):
         return {"success": False, "status": "BUSY", "message": "topic discovery already running"}
@@ -1122,9 +1615,7 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
 
         direction = str(cfg.get("direction") or "").strip()
         if len(direction) < 3:
-            result = {"success": False, "status": "ERROR", "message": "direction is required"}
-            _td_log_run(started, utcnow_iso(), trigger, direction, "ERROR", 0, 0, result)
-            return result
+            direction = _rotate_discovery_direction()
 
         category_hint = str(cfg.get("categoryHint") or "").strip() or None
         per_run_limit = max(5, min(30, int(cfg.get("perRunLimit") or 15)))
@@ -1191,39 +1682,9 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
             queued += 1
             queued_topics.append(topic)
 
-        # If everything from external signals was duplicate/unqueueable,
-        # seed queue with safe synthetic variants from direction.
+        # Second synthetic fallback in app.py is disabled intentionally.
+        # Synthetic variants are now produced only inside factory/discovery.py.
         synthetic_added = 0
-        if queued < top_n:
-            for topic in _synthetic_direction_topics(direction, count=(top_n * 2)):
-                if queued >= top_n:
-                    break
-                if not _topic_is_queueable(topic):
-                    continue
-                tk = _topic_key(topic)
-                if not tk or tk in existing_topic_keys:
-                    continue
-                existing_topic_keys.add(tk)
-
-                category = (category_hint or "").strip() or None
-                slug = topic.lower()
-                slug = re.sub(r"[^a-z0-9\s-]", "", slug)
-                slug = re.sub(r"\s+", "-", slug).strip("-")
-                slug = slug[:120] if slug else None
-                now = utcnow_iso()
-                job_id = secrets.token_hex(12)
-                with db_connect(DB_PATH) as conn:
-                    conn.execute(
-                        """
-                        INSERT INTO jobs (id, topic, slug, status, category, visibility, product_mode, created_at, updated_at)
-                        VALUES (?, ?, ?, 'NEW', ?, 'public', 0, ?, ?)
-                        """,
-                        (job_id, topic, slug, category, now, now),
-                    )
-                log_event(DB_PATH, job_id, "NEW", "Job created by topic autodiscovery (synthetic fallback)")
-                queued += 1
-                synthetic_added += 1
-                queued_topics.append(topic)
 
         result = {
             "success": True,
@@ -1268,7 +1729,7 @@ async def topic_autodiscovery_set_settings(request: Request):
 
     direction = (body.get("direction") or "").strip()
     if enabled and len(direction) < 3:
-        raise HTTPException(status_code=400, detail="direction is required when enabled")
+        direction = _rotate_discovery_direction()
 
     category_hint = _canonical_wine_category((body.get("categoryHint") or "").strip(), fallback="")
     try:
@@ -1393,6 +1854,7 @@ async def import_existing_post(request: Request):
         m_bg = re.search(r'(?is)class="post-hero"[^>]*style="[^\"]*background-image:\s*url\((.*?)\)', src)
         if m_bg:
             bg = (m_bg.group(1) or "").strip().strip("\"'")
+
             hero = os.path.basename(bg) or None
     hero = hero or "logo.png"
     # Extract only the inner .post-content (exclude share/CTA blocks that the template adds).
@@ -1703,6 +2165,9 @@ def publish(job_id: str):
     except Exception as e:
         log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e}")
 
+    # Build/refresh webp variants before rendering cards/feed.
+    _optimize_site_images()
+
     html = render_post_html(
         blog_dir=BLOG_DIR,
         title=title or "",
@@ -1772,27 +2237,24 @@ def publish(job_id: str):
         loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=cat, content_html=loc_content), loc)
 
         if text_api_key:
-            try:
-                tr = _translate_post_payload(
-                    api_key=text_api_key,
-                    model=text_model,
-                    locale=loc,
-                    slug=slug,
-                    title=loc_title,
-                    description=loc_desc,
-                    category=loc_cat,
-                    content_html=loc_content,
-                    faq=loc_faq,
-                )
-                loc_title = tr["title"]
-                loc_desc = tr["description"]
-                loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
-                loc_content = tr["contentHtml"]
-                loc_faq = tr["faq"]
-            except Exception as e:
-                log_event(DB_PATH, job_id, "WARN", f"Localization {loc} failed, fallback to EN: {e}")
+            tr = _translate_post_payload(
+                api_key=text_api_key,
+                model=text_model,
+                locale=loc,
+                slug=slug,
+                title=loc_title,
+                description=loc_desc,
+                category=loc_cat,
+                content_html=loc_content,
+                faq=loc_faq,
+            )
+            loc_title = tr["title"]
+            loc_desc = tr["description"]
+            loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
+            loc_content = tr["contentHtml"]
+            loc_faq = tr["faq"]
         else:
-            log_event(DB_PATH, job_id, "WARN", f"Localization {loc} skipped: no GEMINI_API_KEY/GOOGLE_API_KEY")
+            raise HTTPException(status_code=500, detail=f"Localization {loc} failed: no GEMINI_API_KEY/GOOGLE_API_KEY")
 
         loc_html = render_post_html(
             blog_dir=BLOG_DIR,
@@ -1874,16 +2336,8 @@ def publish(job_id: str):
             f"{origin}/sitemap_blog.xml",
         ]
 
-        sitemap_urls = []
-        for su in candidates:
-            try:
-                req = urllib.request.Request(su, method="HEAD")
-                with urllib.request.urlopen(req, timeout=8) as rr:
-                    code = int(getattr(rr, "status", 200) or 200)
-                    if 200 <= code < 400:
-                        sitemap_urls.append(su)
-            except Exception:
-                continue
+        # Avoid HEAD pre-checks (can be flaky behind CDN/proxy and return empty list).
+        sitemap_urls = list(dict.fromkeys([s for s in candidates if s]))
 
         gsc = _submit_sitemaps_to_search_console(sitemap_urls)
         if gsc.get("success"):
@@ -1947,6 +2401,7 @@ def get_job(job_id: str):
             "telegramStatus": r[20],
             "telegramPostUrl": r[21],
             "telegramPostedAt": r[22],
+
             "telegramError": r[23],
             "twitterStatus": r[24],
             "twitterPostUrl": r[25],
@@ -3198,4 +3653,27 @@ async def settings_site_put(request: Request):
     for k, v in updates.items():
         os.environ[k] = v
 
-    return {"success": True, "values": {k: (os.environ.get(k) or "").strip() for k in SITE_ENV_KEYS}}
+    theme_result = None
+    if any(k in updates for k in ("SITE_BG_COLOR", "SITE_BG_ANIMATION", "SITE_BG_ANIMATION_SPEED", "SITE_ACCENT_COLOR")):
+        theme_result = _apply_site_theme_to_landing()
+
+    pulse_result = None
+    if any(k in updates for k in ("SITE_CONTEXT", "SITE_SUBTOPICS")):
+        pulse_result = _apply_pulse_profile_to_landing()
+
+    langs_result = None
+    if "SITE_ENABLED_LANGS" in updates:
+        langs_csv = ",".join(_normalize_enabled_languages(updates.get("SITE_ENABLED_LANGS", "")))
+        updates["SITE_ENABLED_LANGS"] = langs_csv
+        os.environ["SITE_ENABLED_LANGS"] = langs_csv
+        _env_write_updates(ENV_PATH, {"SITE_ENABLED_LANGS": langs_csv}, set())
+        langs_result = _apply_enabled_languages_to_landing()
+
+    out = {"success": True, "values": {k: (os.environ.get(k) or "").strip() for k in SITE_ENV_KEYS}}
+    if theme_result is not None:
+        out["theme_apply"] = theme_result
+    if langs_result is not None:
+        out["languages_apply"] = langs_result
+    if pulse_result is not None:
+        out["pulse_apply"] = pulse_result
+    return out
