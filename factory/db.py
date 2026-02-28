@@ -27,6 +27,8 @@ def db_init(path: str) -> None:
               visibility TEXT NOT NULL DEFAULT 'public',
               published_url TEXT,
               product_mode INTEGER NOT NULL DEFAULT 0,
+              engagement_mode INTEGER NOT NULL DEFAULT 0,
+              lead_magnet_mode INTEGER NOT NULL DEFAULT 0,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL
             );
@@ -44,6 +46,10 @@ def db_init(path: str) -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN visibility TEXT NOT NULL DEFAULT 'public';")
         if "product_mode" not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN product_mode INTEGER NOT NULL DEFAULT 0;")
+        if "engagement_mode" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN engagement_mode INTEGER NOT NULL DEFAULT 0;")
+        if "lead_magnet_mode" not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN lead_magnet_mode INTEGER NOT NULL DEFAULT 0;")
 
         if 'linkedin_status' not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN linkedin_status TEXT;")
@@ -71,6 +77,15 @@ def db_init(path: str) -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN twitter_posted_at TEXT;")
         if 'twitter_error' not in cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN twitter_error TEXT;")
+
+        if 'tumblr_status' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN tumblr_status TEXT;")
+        if 'tumblr_post_url' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN tumblr_post_url TEXT;")
+        if 'tumblr_posted_at' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN tumblr_posted_at TEXT;")
+        if 'tumblr_error' not in cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN tumblr_error TEXT;")
 
         conn.execute(
             """
@@ -110,6 +125,26 @@ def db_init(path: str) -> None:
             """
         )
         conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tumblr_auth (
+              id INTEGER PRIMARY KEY CHECK (id = 1),
+              oauth_token TEXT,
+              oauth_token_secret TEXT,
+              blog_hostname TEXT
+            );
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS tumblr_oauth_temp (
+              oauth_token TEXT PRIMARY KEY,
+              oauth_token_secret TEXT NOT NULL,
+              state TEXT,
+              created_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS oauth_states_provider_created_idx ON oauth_states(provider, created_at);"
         )
 
@@ -119,12 +154,13 @@ def db_init(path: str) -> None:
               id INTEGER PRIMARY KEY CHECK (id = 1),
               enabled INTEGER NOT NULL DEFAULT 0,
               times_per_day INTEGER NOT NULL DEFAULT 3,
-              channels_json TEXT NOT NULL DEFAULT '["linkedin","telegram","twitter"]',
+              channels_json TEXT NOT NULL DEFAULT '["linkedin","telegram","twitter","tumblr"]',
               timezone TEXT NOT NULL DEFAULT 'UTC',
               start_hour INTEGER NOT NULL DEFAULT 9,
               end_hour INTEGER NOT NULL DEFAULT 21,
               linkedin_include_link INTEGER NOT NULL DEFAULT 0,
               telegram_include_link INTEGER NOT NULL DEFAULT 0,
+              tumblr_include_link INTEGER NOT NULL DEFAULT 0,
               last_slot_key TEXT,
               last_run_at TEXT,
               updated_at TEXT NOT NULL
@@ -134,7 +170,7 @@ def db_init(path: str) -> None:
         conn.execute(
             """
             INSERT INTO autopublish_settings (id, enabled, times_per_day, channels_json, timezone, start_hour, end_hour, updated_at)
-            SELECT 1, 0, 3, '["linkedin","telegram","twitter"]', 'UTC', 9, 21, ?
+            SELECT 1, 0, 3, '["linkedin","telegram","twitter","tumblr"]', 'UTC', 9, 21, ?
             WHERE NOT EXISTS (SELECT 1 FROM autopublish_settings WHERE id = 1);
             """,
             (utcnow_iso(),),
@@ -162,6 +198,8 @@ def db_init(path: str) -> None:
             conn.execute("ALTER TABLE autopublish_settings ADD COLUMN linkedin_include_link INTEGER NOT NULL DEFAULT 0;")
         if "telegram_include_link" not in ap_cols:
             conn.execute("ALTER TABLE autopublish_settings ADD COLUMN telegram_include_link INTEGER NOT NULL DEFAULT 0;")
+        if "tumblr_include_link" not in ap_cols:
+            conn.execute("ALTER TABLE autopublish_settings ADD COLUMN tumblr_include_link INTEGER NOT NULL DEFAULT 0;")
 
 
         conn.execute(
@@ -226,6 +264,12 @@ def db_init(path: str) -> None:
             conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN min_score REAL NOT NULL DEFAULT 55.0;")
         if "top_n" not in td_cols:
             conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN top_n INTEGER NOT NULL DEFAULT 3;")
+        if "product_mode" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN product_mode INTEGER NOT NULL DEFAULT 0;")
+        if "engagement_mode" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN engagement_mode INTEGER NOT NULL DEFAULT 0;")
+        if "lead_magnet_mode" not in td_cols:
+            conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN lead_magnet_mode INTEGER NOT NULL DEFAULT 0;")
         if "last_run_key" not in td_cols:
             conn.execute("ALTER TABLE topic_discovery_settings ADD COLUMN last_run_key TEXT;")
         if "last_run_at" not in td_cols:

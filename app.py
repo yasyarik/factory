@@ -60,6 +60,18 @@ from factory.twitter import (
     extract_article_image_urls_for_x,
     twitter_post_thread,
 )
+from factory.tumblr import (
+    tumblr_build_auth_url,
+    tumblr_request_token,
+    tumblr_exchange_access_token,
+    tumblr_publish_text_post,
+    db_get_tumblr,
+    db_set_tumblr,
+    db_clear_tumblr,
+    db_put_tumblr_temp,
+    db_pop_tumblr_temp,
+    build_tumblr_post_html,
+)
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
@@ -190,6 +202,9 @@ SOCIAL_ENV_KEYS = {
     "LINKEDIN_AUTHOR_BIO",
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
+    "TUMBLR_CONSUMER_KEY",
+    "TUMBLR_CONSUMER_SECRET",
+    "TUMBLR_BLOG_HOSTNAME",
     "TWITTER_BEARER_TOKEN",
     "TWITTER_API_KEY",
     "TWITTER_API_SECRET",
@@ -203,6 +218,7 @@ SOCIAL_ENV_KEYS = {
 SOCIAL_SECRET_KEYS = {
     "LINKEDIN_CLIENT_SECRET",
     "TELEGRAM_BOT_TOKEN",
+    "TUMBLR_CONSUMER_SECRET",
     "TWITTER_BEARER_TOKEN",
     "TWITTER_API_SECRET",
     "TWITTER_ACCESS_TOKEN",
@@ -558,6 +574,14 @@ def _mark_stale_social_postings(max_age_min: int = 5) -> None:
             UPDATE jobs
             SET twitter_status='ERROR', twitter_error=?, updated_at=?
             WHERE twitter_status='POSTING' AND updated_at < ?
+            """,
+            (stale_msg, now, cutoff),
+        )
+        conn.execute(
+            """
+            UPDATE jobs
+            SET tumblr_status='ERROR', tumblr_error=?, updated_at=?
+            WHERE tumblr_status='POSTING' AND updated_at < ?
             """,
             (stale_msg, now, cutoff),
         )
@@ -1151,6 +1175,9 @@ def _social_settings_snapshot() -> dict[str, Any]:
     out["LINKEDIN_AUTHOR_BIO"] = pick("LINKEDIN_AUTHOR_BIO", "LI_AUTHOR_BIO")
     out["TELEGRAM_BOT_TOKEN"] = pick("TELEGRAM_BOT_TOKEN")
     out["TELEGRAM_CHAT_ID"] = pick("TELEGRAM_CHAT_ID")
+    out["TUMBLR_CONSUMER_KEY"] = pick("TUMBLR_CONSUMER_KEY")
+    out["TUMBLR_CONSUMER_SECRET"] = pick("TUMBLR_CONSUMER_SECRET")
+    out["TUMBLR_BLOG_HOSTNAME"] = pick("TUMBLR_BLOG_HOSTNAME")
     out["TWITTER_BEARER_TOKEN"] = pick("TWITTER_BEARER_TOKEN", "X_BEARER_TOKEN")
     out["TWITTER_API_KEY"] = pick("TWITTER_API_KEY", "X_API_KEY", "TWITTER_CONSUMER_KEY")
     out["TWITTER_API_SECRET"] = pick("TWITTER_API_SECRET", "X_API_SECRET", "TWITTER_CONSUMER_SECRET")
@@ -1387,7 +1414,8 @@ def list_jobs():
                    linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error,
                    telegram_status, telegram_post_url, telegram_posted_at, telegram_error,
                    twitter_status, twitter_post_url, twitter_posted_at, twitter_error,
-                   product_mode
+                   tumblr_status, tumblr_post_url, tumblr_posted_at, tumblr_error,
+                   product_mode, engagement_mode, lead_magnet_mode
             FROM jobs
             ORDER BY created_at DESC
             LIMIT 500
@@ -1432,7 +1460,13 @@ def list_jobs():
                 "twitterPostUrl": r[25],
                 "twitterPostedAt": r[26],
                 "twitterError": r[27],
-                "productMode": bool(r[28]),
+                "tumblrStatus": r[28],
+                "tumblrPostUrl": r[29],
+                "tumblrPostedAt": r[30],
+                "tumblrError": r[31],
+                "productMode": bool(r[32]),
+                "engagementMode": bool(r[33]),
+                "leadMagnetMode": bool(r[34]),
             }
         )
 
@@ -1456,6 +1490,8 @@ async def create_job(request: Request):
     # slug can be empty; generate later
     slug = (body.get("slug") or "").strip() or None
     product_mode = bool(body.get("productMode", False))
+    engagement_mode = bool(body.get("engagementMode", False))
+    lead_magnet_mode = bool(body.get("leadMagnetMode", False))
 
     job_id = secrets.token_hex(12)
     now = utcnow_iso()
@@ -1463,10 +1499,10 @@ async def create_job(request: Request):
     with db_connect(DB_PATH) as conn:
         conn.execute(
             """
-            INSERT INTO jobs (id, topic, slug, status, category, hero_image, visibility, product_mode, created_at, updated_at)
-            VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?)
+            INSERT INTO jobs (id, topic, slug, status, category, hero_image, visibility, product_mode, engagement_mode, lead_magnet_mode, created_at, updated_at)
+            VALUES (?, ?, ?, 'NEW', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (job_id, topic, slug, category, hero_image, visibility, 1 if product_mode else 0, now, now),
+            (job_id, topic, slug, category, hero_image, visibility, 1 if product_mode else 0, 1 if engagement_mode else 0, 1 if lead_magnet_mode else 0, now, now),
         )
 
     log_event(DB_PATH, job_id, "NEW", "Job created")
@@ -1502,7 +1538,7 @@ def _td_read_settings() -> dict[str, Any]:
     with db_connect(DB_PATH) as conn:
         r = conn.execute(
             """
-            SELECT enabled, timezone, run_hour, direction, category_hint, per_run_limit, min_score, top_n, last_run_key, last_run_at
+            SELECT enabled, timezone, run_hour, direction, category_hint, per_run_limit, min_score, top_n, product_mode, engagement_mode, lead_magnet_mode, last_run_key, last_run_at
             FROM topic_discovery_settings
             WHERE id=1
             """
@@ -1517,6 +1553,9 @@ def _td_read_settings() -> dict[str, Any]:
             "perRunLimit": 15,
             "minScore": 55.0,
             "topN": 3,
+            "productMode": False,
+            "engagementMode": False,
+            "leadMagnetMode": False,
             "lastRunKey": None,
             "lastRunAt": None,
         }
@@ -1529,8 +1568,11 @@ def _td_read_settings() -> dict[str, Any]:
         "perRunLimit": int(r[5] if r[5] is not None else 15),
         "minScore": float(r[6] if r[6] is not None else 55.0),
         "topN": int(r[7] if r[7] is not None else 3),
-        "lastRunKey": r[8],
-        "lastRunAt": r[9],
+        "productMode": bool(r[8]),
+        "engagementMode": bool(r[9]),
+        "leadMagnetMode": bool(r[10]),
+        "lastRunKey": r[11],
+        "lastRunAt": r[12],
     }
 
 
@@ -1544,6 +1586,9 @@ def _td_write_settings(
     per_run_limit: int,
     min_score: float,
     top_n: int,
+    product_mode: bool,
+    engagement_mode: bool,
+    lead_magnet_mode: bool,
     last_run_key: str | None = None,
     last_run_at: str | None = None,
 ) -> None:
@@ -1553,6 +1598,7 @@ def _td_write_settings(
             UPDATE topic_discovery_settings
             SET enabled=?, timezone=?, run_hour=?, direction=?, category_hint=?,
                 per_run_limit=?, min_score=?, top_n=?,
+                product_mode=?, engagement_mode=?, lead_magnet_mode=?,
                 last_run_key=COALESCE(?, last_run_key),
                 last_run_at=COALESCE(?, last_run_at),
                 updated_at=?
@@ -1567,6 +1613,9 @@ def _td_write_settings(
                 per_run_limit,
                 min_score,
                 top_n,
+                1 if product_mode else 0,
+                1 if engagement_mode else 0,
+                1 if lead_magnet_mode else 0,
                 last_run_key,
                 last_run_at,
                 utcnow_iso(),
@@ -1634,6 +1683,10 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
         min_score = float(cfg.get("minScore") if cfg.get("minScore") is not None else 55.0)
         top_n = max(1, min(12, int(cfg.get("topN") or 3)))
 
+        cfg_product_mode = bool(cfg.get("productMode", False))
+        cfg_engagement_mode = bool(cfg.get("engagementMode", False))
+        cfg_lead_magnet_mode = bool(cfg.get("leadMagnetMode", False))
+
         data = discover_topics(direction=direction, limit=per_run_limit, category_hint=category_hint)
         items = list(data.get("items") or [])
 
@@ -1685,10 +1738,10 @@ def _run_topic_autodiscovery(trigger: str = "manual", override: dict[str, Any] |
             with db_connect(DB_PATH) as conn:
                 conn.execute(
                     """
-                    INSERT INTO jobs (id, topic, slug, status, category, visibility, product_mode, created_at, updated_at)
-                    VALUES (?, ?, ?, 'NEW', ?, 'public', 0, ?, ?)
+                    INSERT INTO jobs (id, topic, slug, status, category, visibility, product_mode, engagement_mode, lead_magnet_mode, created_at, updated_at)
+                    VALUES (?, ?, ?, 'NEW', ?, 'public', ?, ?, ?, ?, ?)
                     """,
-                    (job_id, topic, slug, category, now, now),
+                    (job_id, topic, slug, category, 1 if cfg_product_mode else 0, 1 if cfg_engagement_mode else 0, 1 if cfg_lead_magnet_mode else 0, now, now),
                 )
             log_event(DB_PATH, job_id, "NEW", "Job created by topic autodiscovery")
             queued += 1
@@ -1762,6 +1815,10 @@ async def topic_autodiscovery_set_settings(request: Request):
         top_n = 3
     top_n = max(1, min(12, top_n))
 
+    product_mode = bool(body.get("productMode", False))
+    engagement_mode = bool(body.get("engagementMode", False))
+    lead_magnet_mode = bool(body.get("leadMagnetMode", False))
+
     st = _td_read_settings()
     _td_write_settings(
         enabled=enabled,
@@ -1772,6 +1829,9 @@ async def topic_autodiscovery_set_settings(request: Request):
         per_run_limit=per_run_limit,
         min_score=min_score,
         top_n=top_n,
+        product_mode=product_mode,
+        engagement_mode=engagement_mode,
+        lead_magnet_mode=lead_magnet_mode,
         last_run_key=st.get("lastRunKey"),
         last_run_at=st.get("lastRunAt"),
     )
@@ -1788,6 +1848,9 @@ async def topic_autodiscovery_run(request: Request):
         "perRunLimit": body.get("perRunLimit") if isinstance(body, dict) else None,
         "minScore": body.get("minScore") if isinstance(body, dict) else None,
         "topN": body.get("topN") if isinstance(body, dict) else None,
+        "productMode": body.get("productMode") if isinstance(body, dict) else None,
+        "engagementMode": body.get("engagementMode") if isinstance(body, dict) else None,
+        "leadMagnetMode": body.get("leadMagnetMode") if isinstance(body, dict) else None,
     }
     # keep persisted config, override only explicitly passed fields
     override = {k: v for k, v in override.items() if v not in (None, "")}
@@ -1928,14 +1991,14 @@ def get_logs(job_id: str):
 def generate(job_id: str):
     with db_connect(DB_PATH) as conn:
         job = conn.execute(
-            "SELECT id, topic, slug, status, category, hero_image, draft_html, product_mode FROM jobs WHERE id = ?",
+            "SELECT id, topic, slug, status, category, hero_image, draft_html, product_mode, engagement_mode, lead_magnet_mode FROM jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
 
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    _id, topic, slug, status, category, hero_image, draft_html, product_mode = job
+    _id, topic, slug, status, category, hero_image, draft_html, product_mode, engagement_mode, lead_magnet_mode = job
 
     log_event(DB_PATH, job_id, "INFO", "Starting generation")
 
@@ -1960,6 +2023,8 @@ def generate(job_id: str):
                 slug_hint=slug,
                 source_html=_sanitize_source_html(draft_html) if (draft_html and status != "NEW") else None,
                 product_mode=bool(product_mode),
+                engagement_mode=bool(engagement_mode),
+                lead_magnet_mode=bool(lead_magnet_mode),
                 previous=draft,
                 problems=problems if attempt > 1 else None,
             )
@@ -2372,7 +2437,8 @@ def get_job(job_id: str):
                    linkedin_status, linkedin_post_url, linkedin_posted_at, linkedin_error,
                    telegram_status, telegram_post_url, telegram_posted_at, telegram_error,
                    twitter_status, twitter_post_url, twitter_posted_at, twitter_error,
-                   product_mode
+                   tumblr_status, tumblr_post_url, tumblr_posted_at, tumblr_error,
+                   product_mode, engagement_mode, lead_magnet_mode
             FROM jobs
             WHERE id=?
             """,
@@ -2419,7 +2485,13 @@ def get_job(job_id: str):
             "twitterPostUrl": r[25],
             "twitterPostedAt": r[26],
             "twitterError": r[27],
-            "productMode": bool(r[28]),
+            "tumblrStatus": r[28],
+            "tumblrPostUrl": r[29],
+            "tumblrPostedAt": r[30],
+            "tumblrError": r[31],
+            "productMode": bool(r[32]),
+            "engagementMode": bool(r[33]),
+            "leadMagnetMode": bool(r[34]),
         },
     }
 
@@ -2482,6 +2554,10 @@ async def update_job(job_id: str, request: Request):
 
     if isinstance(body.get("productMode"), bool):
         set_if("product_mode", 1 if body.get("productMode") else 0)
+    if isinstance(body.get("engagementMode"), bool):
+        set_if("engagement_mode", 1 if body.get("engagementMode") else 0)
+    if isinstance(body.get("leadMagnetMode"), bool):
+        set_if("lead_magnet_mode", 1 if body.get("leadMagnetMode") else 0)
 
     if not updates:
         return {"success": True}
@@ -2631,7 +2707,7 @@ def _ap_read_settings() -> dict[str, Any]:
     with db_connect(DB_PATH) as conn:
         r = conn.execute(
             """
-            SELECT enabled, times_per_day, channels_json, timezone, start_hour, end_hour, linkedin_include_link, telegram_include_link, last_slot_key, last_run_at
+            SELECT enabled, times_per_day, channels_json, timezone, start_hour, end_hour, linkedin_include_link, telegram_include_link, tumblr_include_link, last_slot_key, last_run_at
             FROM autopublish_settings
             WHERE id=1
             """
@@ -2641,12 +2717,13 @@ def _ap_read_settings() -> dict[str, Any]:
         return {
             "enabled": False,
             "times_per_day": 3,
-            "channels": ["linkedin", "telegram", "twitter"],
+            "channels": ["linkedin", "telegram", "twitter", "tumblr"],
             "timezone": "UTC",
             "start_hour": 9,
             "end_hour": 21,
             "linkedin_include_link": False,
             "telegram_include_link": False,
+            "tumblr_include_link": False,
             "last_slot_key": None,
             "last_run_at": None,
         }
@@ -2655,11 +2732,11 @@ def _ap_read_settings() -> dict[str, Any]:
     try:
         parsed = json.loads(r[2] or "[]")
         if isinstance(parsed, list):
-            channels = [str(x).strip().lower() for x in parsed if str(x).strip().lower() in ("linkedin", "telegram", "twitter")]
+            channels = [str(x).strip().lower() for x in parsed if str(x).strip().lower() in ("linkedin", "telegram", "twitter", "tumblr")]
     except Exception:
         channels = []
     if not channels:
-        channels = ["linkedin", "telegram", "twitter"]
+        channels = ["linkedin", "telegram", "twitter", "tumblr"]
 
     return {
         "enabled": bool(r[0]),
@@ -2670,25 +2747,26 @@ def _ap_read_settings() -> dict[str, Any]:
         "end_hour": int(r[5] if r[5] is not None else 21),
         "linkedin_include_link": bool(r[6]),
         "telegram_include_link": bool(r[7]),
-        "last_slot_key": r[8],
-        "last_run_at": r[9],
+        "tumblr_include_link": bool(r[8]),
+        "last_slot_key": r[9],
+        "last_run_at": r[10],
     }
 
 
-def _ap_write_settings(*, enabled: bool, times_per_day: int, channels: list[str], timezone_name: str, start_hour: int, end_hour: int, linkedin_include_link: bool = False, telegram_include_link: bool = False, last_slot_key: str | None = None, last_run_at: str | None = None) -> None:
+def _ap_write_settings(*, enabled: bool, times_per_day: int, channels: list[str], timezone_name: str, start_hour: int, end_hour: int, linkedin_include_link: bool = False, telegram_include_link: bool = False, tumblr_include_link: bool = False, last_slot_key: str | None = None, last_run_at: str | None = None) -> None:
     ch_json = json.dumps(channels)
     with db_connect(DB_PATH) as conn:
         conn.execute(
             """
             UPDATE autopublish_settings
             SET enabled=?, times_per_day=?, channels_json=?, timezone=?, start_hour=?, end_hour=?,
-                linkedin_include_link=?, telegram_include_link=?,
+                linkedin_include_link=?, telegram_include_link=?, tumblr_include_link=?,
                 last_slot_key=COALESCE(?, last_slot_key),
                 last_run_at=COALESCE(?, last_run_at),
                 updated_at=?
             WHERE id=1
             """,
-            (1 if enabled else 0, times_per_day, ch_json, timezone_name, start_hour, end_hour, 1 if linkedin_include_link else 0, 1 if telegram_include_link else 0, last_slot_key, last_run_at, utcnow_iso()),
+            (1 if enabled else 0, times_per_day, ch_json, timezone_name, start_hour, end_hour, 1 if linkedin_include_link else 0, 1 if telegram_include_link else 0, 1 if tumblr_include_link else 0, last_slot_key, last_run_at, utcnow_iso()),
         )
 
 
@@ -2820,7 +2898,7 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
             return result
 
         if not channels:
-            channels = ["linkedin", "telegram", "twitter"]
+            channels = ["linkedin", "telegram", "twitter", "tumblr"]
 
         with db_connect(DB_PATH) as conn:
             rows = conn.execute(
@@ -2828,7 +2906,8 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
                 SELECT id, slug, published_url,
                        COALESCE(linkedin_status, ''),
                        COALESCE(telegram_status, ''),
-                       COALESCE(twitter_status, '')
+                       COALESCE(twitter_status, ''),
+                       COALESCE(tumblr_status, '')
                 FROM jobs
                 WHERE status='READY'
                 ORDER BY created_at ASC
@@ -2838,11 +2917,12 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
 
         selected = None
         for r in rows:
-            jid, slug, published_url, li_st, tg_st, tw_st = r
+            jid, slug, published_url, li_st, tg_st, tw_st, tu_st = r
             st_map = {
                 "linkedin": (li_st or "").upper().strip(),
                 "telegram": (tg_st or "").upper().strip(),
                 "twitter": (tw_st or "").upper().strip(),
+                "tumblr": (tu_st or "").upper().strip(),
             }
             has_unposted_channel = any(st_map.get(ch, "") != "POSTED" for ch in channels)
             if has_unposted_channel:
@@ -2858,18 +2938,20 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
                     "SELECT id, slug, published_url, "
                     "COALESCE(linkedin_status, ''), "
                     "COALESCE(telegram_status, ''), "
-                    "COALESCE(twitter_status, '') "
+                    "COALESCE(twitter_status, ''), "
+                    "COALESCE(tumblr_status, '') "
                     "FROM jobs WHERE status='READY' ORDER BY created_at ASC LIMIT 300"
                 )
                 with db_connect(DB_PATH) as conn:
                     rows = conn.execute(sql).fetchall()
 
                 for r in rows:
-                    jid, slug, published_url, li_st, tg_st, tw_st = r
+                    jid, slug, published_url, li_st, tg_st, tw_st, tu_st = r
                     st_map = {
                         'linkedin': (li_st or '').upper().strip(),
                         'telegram': (tg_st or '').upper().strip(),
                         'twitter': (tw_st or '').upper().strip(),
+                        'tumblr': (tu_st or '').upper().strip(),
                     }
                     has_unposted_channel = any(st_map.get(ch, '') != 'POSTED' for ch in channels)
                     if has_unposted_channel:
@@ -2900,13 +2982,14 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
         # 2) publish socials only for channels not yet POSTED
         with db_connect(DB_PATH) as conn:
             st = conn.execute(
-                "SELECT COALESCE(linkedin_status,''), COALESCE(telegram_status,''), COALESCE(twitter_status,'') FROM jobs WHERE id=?",
+                "SELECT COALESCE(linkedin_status,''), COALESCE(telegram_status,''), COALESCE(twitter_status,''), COALESCE(tumblr_status,'') FROM jobs WHERE id=?",
                 (job_id,),
             ).fetchone()
         st_map = {
             "linkedin": (st[0] if st else "").upper().strip(),
             "telegram": (st[1] if st else "").upper().strip(),
             "twitter": (st[2] if st else "").upper().strip(),
+            "tumblr": (st[3] if st else "").upper().strip(),
         }
 
         for ch in channels:
@@ -2920,6 +3003,8 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
                     telegram_publish(job_id, {"includeLink": bool(settings.get("telegram_include_link"))})
                 elif ch == "twitter":
                     twitter_publish(job_id, {"includeLink": bool(settings.get("telegram_include_link"))})
+                elif ch == "tumblr":
+                    tumblr_publish(job_id, {"includeLink": bool(settings.get("tumblr_include_link"))})
                 else:
                     continue
 
@@ -2950,12 +3035,13 @@ def _autopublish_loop() -> None:
                         _ap_write_settings(
                             enabled=bool(st.get("enabled")),
                             times_per_day=int(st.get("times_per_day") or 3),
-                            channels=list(st.get("channels") or ["linkedin", "telegram", "twitter"]),
+                            channels=list(st.get("channels") or ["linkedin", "telegram", "twitter", "tumblr"]),
                             timezone_name=(st.get("timezone") or "UTC"),
                             start_hour=int(st.get("start_hour") or 9),
                             end_hour=int(st.get("end_hour") or 21),
                             linkedin_include_link=bool(st.get("linkedin_include_link")),
                             telegram_include_link=bool(st.get("telegram_include_link")),
+                            tumblr_include_link=bool(st.get("tumblr_include_link")),
                             last_slot_key=key,
                             last_run_at=utcnow_iso(),
                         )
@@ -3028,14 +3114,15 @@ async def autopublish_set_settings(request: Request):
     times_per_day = int(body.get("timesPerDay") or body.get("times_per_day") or 3)
     times_per_day = max(1, min(8, times_per_day))
 
-    channels = body.get("channels") or ["linkedin", "telegram", "twitter"]
+    channels = body.get("channels") or ["linkedin", "telegram", "twitter", "tumblr"]
     if not isinstance(channels, list):
         raise HTTPException(status_code=400, detail="channels must be list")
-    channels = [str(x).strip().lower() for x in channels if str(x).strip().lower() in ("linkedin", "telegram", "twitter")]
+    channels = [str(x).strip().lower() for x in channels if str(x).strip().lower() in ("linkedin", "telegram", "twitter", "tumblr")]
 
     timezone_name = (body.get("timezone") or "UTC").strip() or "UTC"
     linkedin_include_link = bool(body.get("linkedinIncludeLink", body.get("linkedin_include_link", False)))
     telegram_include_link = bool(body.get("telegramIncludeLink", body.get("telegram_include_link", False)))
+    tumblr_include_link = bool(body.get("tumblrIncludeLink", body.get("tumblr_include_link", False)))
     start_hour = int(body.get("startHour") if body.get("startHour") is not None else 9)
     end_hour = int(body.get("endHour") if body.get("endHour") is not None else 21)
     start_hour = max(0, min(23, start_hour))
@@ -3466,6 +3553,180 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
                     "UPDATE jobs SET linkedin_status='ERROR', linkedin_error=?, updated_at=? WHERE id=?",
                     (msg, utcnow_iso(), job_id),
                 )
+            log_event(DB_PATH, job_id, "ERROR", msg)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    return {"success": True, "status": "POSTING"}
+
+
+# --- Tumblr integration ---
+
+@app.get("/api/tumblr/status")
+def tumblr_status():
+    auth = db_get_tumblr(DB_PATH) or {}
+    env_blog = (os.environ.get("TUMBLR_BLOG_HOSTNAME") or "").strip()
+    return {
+        "success": True,
+        "connected": bool((auth.get("oauth_token") or "").strip() and (auth.get("oauth_token_secret") or "").strip()),
+        "blogHostname": (env_blog or (auth.get("blog_hostname") or "")).strip() or None,
+    }
+
+
+@app.post("/api/tumblr/disconnect")
+def tumblr_disconnect():
+    db_clear_tumblr(DB_PATH)
+    return {"success": True}
+
+
+@app.get("/tumblr/connect")
+def tumblr_connect():
+    consumer_key = (os.environ.get("TUMBLR_CONSUMER_KEY") or "").strip()
+    consumer_secret = (os.environ.get("TUMBLR_CONSUMER_SECRET") or "").strip()
+    callback_base = (os.environ.get("TUMBLR_REDIRECT_URI") or "").strip() or (_site_origin() + "/factory/tumblr/callback")
+
+    if not consumer_key or not consumer_secret:
+        raise HTTPException(status_code=500, detail="Missing TUMBLR_CONSUMER_KEY / TUMBLR_CONSUMER_SECRET")
+
+    state = secrets.token_urlsafe(24)
+    db_create_state(DB_PATH, provider="tumblr", state=state)
+
+    sep = '&' if ('?' in callback_base) else '?'
+    callback_url = f"{callback_base}{sep}state={state}"
+
+    token_data = tumblr_request_token(consumer_key=consumer_key, consumer_secret=consumer_secret, callback_url=callback_url)
+    oauth_token = (token_data.get("oauth_token") or "").strip()
+    oauth_token_secret = (token_data.get("oauth_token_secret") or "").strip()
+    if not oauth_token or not oauth_token_secret:
+        raise HTTPException(status_code=400, detail="Tumblr request_token failed")
+
+    db_put_tumblr_temp(DB_PATH, oauth_token=oauth_token, oauth_token_secret=oauth_token_secret, state=state)
+    return RedirectResponse(url=tumblr_build_auth_url(oauth_token), status_code=302)
+
+
+@app.get("/tumblr/callback", response_class=HTMLResponse)
+def tumblr_callback(oauth_token: str | None = None, oauth_verifier: str | None = None, state: str | None = None, error: str | None = None):
+    if error:
+        return HTMLResponse(content=f"<h3>Tumblr OAuth error: {error}</h3><p><a href='/factory/'>Back to Factory</a></p>", status_code=400)
+
+    if not oauth_token or not oauth_verifier:
+        raise HTTPException(status_code=400, detail="Missing oauth_token/oauth_verifier")
+
+    temp = db_pop_tumblr_temp(DB_PATH, oauth_token=oauth_token)
+    if not temp:
+        raise HTTPException(status_code=400, detail="Unknown/expired oauth token")
+
+    cb_state = (state or temp.get("state") or "").strip()
+    if not cb_state or not db_consume_state(DB_PATH, provider="tumblr", state=cb_state, max_age_min=20):
+        raise HTTPException(status_code=400, detail="Invalid/expired state")
+
+    consumer_key = (os.environ.get("TUMBLR_CONSUMER_KEY") or "").strip()
+    consumer_secret = (os.environ.get("TUMBLR_CONSUMER_SECRET") or "").strip()
+    if not consumer_key or not consumer_secret:
+        raise HTTPException(status_code=500, detail="Missing TUMBLR_CONSUMER_KEY / TUMBLR_CONSUMER_SECRET")
+
+    access = tumblr_exchange_access_token(
+        consumer_key=consumer_key,
+        consumer_secret=consumer_secret,
+        request_token=oauth_token,
+        request_token_secret=(temp.get("oauth_token_secret") or ""),
+        oauth_verifier=oauth_verifier,
+    )
+
+    access_token = (access.get("oauth_token") or "").strip()
+    access_secret = (access.get("oauth_token_secret") or "").strip()
+    if not access_token or not access_secret:
+        raise HTTPException(status_code=400, detail="Tumblr access_token exchange failed")
+
+    blog_hostname = ((os.environ.get("TUMBLR_BLOG_HOSTNAME") or "").strip() or (access.get("blog_hostname") or "").strip() or None)
+
+    db_set_tumblr(DB_PATH, oauth_token=access_token, oauth_token_secret=access_secret, blog_hostname=blog_hostname)
+    return RedirectResponse(url="/factory/", status_code=302)
+
+
+@app.post("/api/jobs/{job_id}/tumblr/publish")
+def tumblr_publish(job_id: str, payload: dict[str, Any] | None = None):
+    payload = payload or {}
+
+    consumer_key = (os.environ.get("TUMBLR_CONSUMER_KEY") or "").strip()
+    consumer_secret = (os.environ.get("TUMBLR_CONSUMER_SECRET") or "").strip()
+    if not consumer_key or not consumer_secret:
+        raise HTTPException(status_code=500, detail="Missing TUMBLR_CONSUMER_KEY / TUMBLR_CONSUMER_SECRET")
+
+    include_link = bool(payload.get("includeLink", True))
+
+    auth = db_get_tumblr(DB_PATH) or {}
+    oauth_token = (auth.get("oauth_token") or "").strip()
+    oauth_token_secret = (auth.get("oauth_token_secret") or "").strip()
+    blog_hostname = ((os.environ.get("TUMBLR_BLOG_HOSTNAME") or "").strip() or (auth.get("blog_hostname") or "").strip())
+
+    if not oauth_token or not oauth_token_secret:
+        raise HTTPException(status_code=400, detail="Tumblr not connected")
+    if not blog_hostname:
+        raise HTTPException(status_code=400, detail="Set TUMBLR_BLOG_HOSTNAME in social settings")
+
+    with db_connect(DB_PATH) as conn:
+        job = conn.execute(
+            "SELECT topic, slug, title, description, draft_html, status, published_url, tumblr_status FROM jobs WHERE id=?",
+            (job_id,),
+        ).fetchone()
+
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    topic, slug, title, description, draft_html, status, published_url, tu_status = job
+
+    if tu_status == "POSTING":
+        return {"success": True, "status": "POSTING"}
+
+    if not slug:
+        raise HTTPException(status_code=400, detail="Missing slug")
+
+    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+
+    with db_connect(DB_PATH) as conn:
+        conn.execute("UPDATE jobs SET tumblr_status='POSTING', tumblr_error=NULL, updated_at=? WHERE id=?", (utcnow_iso(), job_id))
+
+    log_event(DB_PATH, job_id, "INFO", f"Tumblr posting started: {blog_hostname}")
+
+    import threading
+
+    def _worker():
+        try:
+            post_html = build_tumblr_post_html(
+                title=title or topic or slug,
+                description=description or "",
+                content_html=draft_html or "",
+                url=url,
+                include_link=include_link,
+            )
+
+            out = tumblr_publish_text_post(
+                consumer_key=consumer_key,
+                consumer_secret=consumer_secret,
+                oauth_token=oauth_token,
+                oauth_token_secret=oauth_token_secret,
+                blog_hostname=blog_hostname,
+                title=(title or topic or slug),
+                body_html=post_html,
+                tags=[(topic or ""), (slug or "")],
+            )
+
+            post_id = (out.get("post_id") or "").strip()
+            post_url = (out.get("post_url") or "").strip()
+
+            with db_connect(DB_PATH) as conn:
+                conn.execute(
+                    "UPDATE jobs SET tumblr_status='POSTED', tumblr_post_url=?, tumblr_posted_at=?, tumblr_error=NULL, updated_at=? WHERE id=?",
+                    (post_url or post_id or None, utcnow_iso(), utcnow_iso(), job_id),
+                )
+
+            _save_social_post(job_id=job_id, channel="tumblr", content_text=post_html, content_json=out, remote_url=post_url or post_id or None, status="POSTED")
+            log_event(DB_PATH, job_id, "READY", "Posted to Tumblr")
+        except Exception as e:
+            msg = f"Tumblr publish failed: {e}"
+            with db_connect(DB_PATH) as conn:
+                conn.execute("UPDATE jobs SET tumblr_status='ERROR', tumblr_error=?, updated_at=? WHERE id=?", (msg, utcnow_iso(), job_id))
             log_event(DB_PATH, job_id, "ERROR", msg)
 
     threading.Thread(target=_worker, daemon=True).start()
