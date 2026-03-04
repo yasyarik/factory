@@ -3064,6 +3064,9 @@ def _autopublish_loop() -> None:
                             per_run_limit=int(td.get("perRunLimit") or 15),
                             min_score=float(td.get("minScore") if td.get("minScore") is not None else 55.0),
                             top_n=int(td.get("topN") or 3),
+                            product_mode=bool(td.get("productMode", False)),
+                            engagement_mode=bool(td.get("engagementMode", False)),
+                            lead_magnet_mode=bool(td.get("leadMagnetMode", False)),
                             last_run_key=key,
                             last_run_at=utcnow_iso() if out.get("success") else td.get("lastRunAt"),
                         )
@@ -3837,6 +3840,10 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
             log_event(DB_PATH, job_id, "READY", "Posted to Telegram")
         except Exception as e:
             msg = f"Telegram publish failed: {e}"
+            rejected = getattr(e, "rejected_text", "") or ""
+            if rejected:
+                compact = " ".join(rejected.split())[:420]
+                msg = f"{msg} | rejected: {compact}"
             with db_connect(DB_PATH) as conn:
                 conn.execute(
                     "UPDATE jobs SET telegram_status='ERROR', telegram_error=?, updated_at=? WHERE id=?",
@@ -3987,3 +3994,152 @@ async def settings_site_put(request: Request):
     if pulse_result is not None:
         out["pulse_apply"] = pulse_result
     return out
+
+
+def _safe_json_dict(raw: Any) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    return {}
+
+
+def _extract_year(text: str) -> str:
+    m = re.search(r"\b(19|20)\d{2}\b", text or "")
+    return m.group(0) if m else ""
+
+
+@app.post("/api/detect-wine")
+async def api_detect_wine(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    image_url = str((body or {}).get("imageUrl") or "").strip()
+    page_url = str((body or {}).get("pageUrl") or "").strip()
+    text_hint = str((body or {}).get("textHint") or "").strip()
+
+    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    if not api_key:
+        return JSONResponse(status_code=500, content={"error": "GEMINI_API_KEY is not configured."})
+
+    prompt = "\n".join([
+        "You extract wine fields for product matching.",
+        "Return JSON only with keys:",
+        "wine_name, grape, country, region, year, confidence, notes",
+        "Rules:",
+        "- grape should be canonical style (e.g. Chardonnay, Pinot Noir, Cabernet Sauvignon).",
+        "- year must be 4 digits if known, else empty string.",
+        "- if unknown keep empty string.",
+        f"Page URL: {page_url}",
+        f"Text hint: {text_hint}",
+        f"Image URL: {image_url}",
+    ])
+
+    parts = [{"text": prompt}]
+
+    if image_url:
+        try:
+            with urllib.request.urlopen(image_url, timeout=8) as r:
+                img_bytes = r.read()
+                content_type = (r.headers.get("Content-Type") or "image/jpeg").split(";")[0].strip() or "image/jpeg"
+            import base64
+            parts.append({
+                "inline_data": {
+                    "mime_type": content_type,
+                    "data": base64.b64encode(img_bytes).decode("ascii")
+                }
+            })
+        except Exception:
+            pass
+
+    payload = {
+        "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.1
+        }
+    }
+
+    preferred_model = (
+        os.environ.get("GEMINI_TEXT_MODEL")
+        or os.environ.get("GEMINI_MODEL_TEXT")
+        or "gemini-2.5-flash"
+    ).strip()
+    models_to_try = [preferred_model, "gemini-2.5-flash", "gemini-2.0-flash-lite"]
+
+    data = None
+    last_error = None
+    for model in models_to_try:
+        if not model:
+            continue
+        gemini_url = (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            + model
+            + ":generateContent?key="
+            + urllib.parse.quote(api_key)
+        )
+        try:
+            req = urllib.request.Request(
+                gemini_url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw)
+            break
+        except Exception as e:
+            last_error = e
+            continue
+
+    if data is None:
+        return JSONResponse(status_code=502, content={"error": f"Gemini request failed: {last_error}"})
+
+    model_text = ""
+    try:
+        model_text = (
+            data.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+    except Exception:
+        model_text = ""
+
+    parsed = _safe_json_dict({})
+    if model_text:
+        try:
+            parsed = _safe_json_dict(json.loads(model_text))
+        except Exception:
+            parsed = {}
+
+    year = str(parsed.get("year") or _extract_year(model_text) or "").strip()
+    if year and not re.match(r"^(19|20)\d{2}$", year):
+        year = _extract_year(year)
+
+    raw_conf = parsed.get("confidence")
+    conf = 0.0
+    try:
+        conf = float(raw_conf)
+    except Exception:
+        t = str(raw_conf or "").strip().lower()
+        if t in ("high", "very high"):
+            conf = 0.9
+        elif t in ("medium", "mid"):
+            conf = 0.6
+        elif t in ("low", "very low"):
+            conf = 0.3
+
+    out = {
+        "wine_name": str(parsed.get("wine_name") or "").strip(),
+        "grape": str(parsed.get("grape") or "").strip(),
+        "country": str(parsed.get("country") or "").strip(),
+        "region": str(parsed.get("region") or "").strip(),
+        "year": year,
+        "confidence": conf,
+        "notes": str(parsed.get("notes") or "").strip(),
+    }
+
+    return JSONResponse(content=out, headers={"Access-Control-Allow-Origin": "*"})
+

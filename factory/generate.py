@@ -27,6 +27,17 @@ GLOBAL RULES:
 - Output MUST be STRICT JSON only.
 - Obey ALL requirements. If something is missing, FIX it and return corrected JSON (do not explain).
 
+TYPOGRAPHY / SYMBOL RULES:
+- NEVER use em dash or en dash symbols (—, –). Use short hyphen-minus (-) only.
+- NEVER use any asterisks (*) in output text (single or repeated). Do not use markdown bold/italic syntax.
+- NEVER use smart or angled quotes: “ ” « » ‘ ’. Use plain ASCII quotes only (" and ').
+- NEVER use non-breaking space (U+00A0). Use regular spaces only.
+- NEVER use ellipsis symbol (…). Use three dots (...) instead.
+- NEVER output zero-width or BOM characters (U+200B, U+200C, U+200D, U+FEFF).
+- Use HTML tags for emphasis (<strong>...</strong>) instead of markdown symbols.
+- Prefer plain ASCII punctuation when possible.
+
+
 STRUCTURE REQUIREMENTS:
 - contentHtml MUST start with a lead paragraph BEFORE the first H2:
   - <p><strong>Direct answer...</strong> 1-2 more sentences.</p>
@@ -289,8 +300,11 @@ def generate_draft(
     slug_hint: str | None,
     source_html: str | None = None,
     product_mode: bool = False,
+    engagement_mode: bool = False,
+    lead_magnet_mode: bool = False,
     previous: dict[str, Any] | None = None,
     problems: list[str] | None = None,
+    **_extra: Any,
 ) -> dict[str, Any]:
     context = _rank_context(topic, existing_posts, limit=20)
 
@@ -307,6 +321,12 @@ def generate_draft(
     }
 
     user["brandName"] = _brand_name()
+    user["modes"] = {
+        "product": bool(product_mode),
+        "engagement": bool(engagement_mode),
+        "leadMagnet": bool(lead_magnet_mode),
+    }
+
 
     if product_mode:
         product_knowledge = rank_product_knowledge(topic, limit=14)

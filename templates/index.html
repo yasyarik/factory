@@ -354,15 +354,16 @@
             <table>
               <thead>
                 <tr>
-                  <th style="width: 16%;">Started</th>
+                  <th style="width: 14%;">Started</th>
                   <th style="width: 10%;">Trigger</th>
                   <th style="width: 10%;">Status</th>
-                  <th style="width: 14%;">Job</th>
-                  <th style="width: 50%;">Result</th>
+                  <th style="width: 12%;">Job</th>
+                  <th style="width: 24%;">Title</th>
+                  <th style="width: 30%;">Result</th>
                 </tr>
               </thead>
               <tbody id="apRunsTbody">
-                <tr><td colspan="5" class="muted" style="padding:12px;">No runs yet.</td></tr>
+                <tr><td colspan="6" class="muted" style="padding:12px;">No runs yet.</td></tr>
               </tbody>
             </table>
           </div>
@@ -957,28 +958,43 @@
         }
       }
 
+      function _runJobTitle(jobId) {
+        if (!jobId) return '-';
+        var j = (_allJobs || []).find(function(x){ return x && x.id === jobId; });
+        if (!j) return 'deleted job: ' + String(jobId).slice(0, 12) + '...';
+        return (j.title || j.topic || ('job: ' + String(jobId).slice(0, 12) + '...'));
+      }
+
       async function loadAutopublishRuns() {
         var tbody = el('apRunsTbody');
         if (!tbody) return;
         try {
+          if (!Array.isArray(_allJobs) || !_allJobs.length) {
+            try {
+              var jobsData = await api('/api/jobs');
+              _allJobs = (jobsData && jobsData.jobs) ? jobsData.jobs : [];
+            } catch (_) {}
+          }
           var out = await api('/api/autopublish/runs?limit=20');
           var rows = (out && out.runs) ? out.runs : [];
           if (!rows.length) {
-            tbody.innerHTML = '<tr><td colspan="5" class="muted" style="padding:12px;">No runs yet.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="muted" style="padding:12px;">No runs yet.</td></tr>';
             return;
           }
           tbody.innerHTML = rows.map(function(r) {
             var res = r.result ? escapeHtml(JSON.stringify(r.result)) : '-';
+            var t = (r.title || r.topic || _runJobTitle(r.jobId));
             return '<tr>'
               + '<td class="mono">' + escapeHtml(r.startedAt || '-') + '</td>'
               + '<td>' + escapeHtml(r.trigger || '-') + '</td>'
               + '<td><span class="tag ' + tagClass((r.status||'').toLowerCase()) + '">' + escapeHtml(r.status || '-') + '</span></td>'
               + '<td class="mono">' + escapeHtml(r.jobId || '-') + '</td>'
+              + '<td title="' + escapeHtml(t) + '">' + escapeHtml(t) + '</td>'
               + '<td class="mono">' + res + '</td>'
               + '</tr>';
           }).join('');
         } catch (e) {
-          tbody.innerHTML = '<tr><td colspan="5" class="err" style="padding:12px;">' + escapeHtml(String((e && e.message) || e)) + '</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="6" class="err" style="padding:12px;">' + escapeHtml(String((e && e.message) || e)) + '</td></tr>';
         }
       }
 

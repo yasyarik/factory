@@ -50,6 +50,24 @@ def _truncate(s: str, max_len: int) -> str:
     return cut.rstrip(" ,;:-")
 
 
+def _truncate_sentence(s: str, max_len: int) -> str:
+    t = (s or "").strip()
+    if len(t) <= max_len:
+        return t
+    cut = t[:max_len]
+    # Prefer complete sentence boundary
+    sent = max(cut.rfind('. '), cut.rfind('! '), cut.rfind('? '))
+    if sent >= int(max_len * 0.55):
+        return cut[: sent + 1].strip()
+    sp = cut.rfind(' ')
+    if sp >= int(max_len * 0.7):
+        cut = cut[:sp]
+    cut = cut.rstrip(' ,;:-')
+    if cut and cut[-1] not in '.!?':
+        cut += '.'
+    return cut
+
+
 def _split_text_for_telegram(text: str, max_len: int = 3900) -> list[str]:
     s = (text or "").strip()
     if not s:
@@ -150,6 +168,20 @@ def _cyrillic_ratio(text: str) -> float:
     return len(cyr) / len(chars)
 
 
+def _first_sentence(text: str) -> str:
+    t = _cleanup_post_text(text)
+    if not t:
+        return t
+    m = re.search(r"(.+?[.!?])(?:\s|$)", t)
+    if m:
+        return m.group(1).strip()
+    # fallback: comma/semicolon boundary if no sentence punctuation
+    m2 = re.search(r"(.+?[,;:])(?:\s|$)", t)
+    if m2 and len(m2.group(1)) >= 40:
+        return m2.group(1).strip()
+    return t
+
+
 def _extract_sentences(body: str, limit: int = 18) -> list[str]:
     txt = _normalize_dashes(body or "")
     txt = re.sub(r"\s+", " ", txt)
@@ -203,20 +235,20 @@ def _compact_ru_post_for_limit(text: str, max_len: int = 930) -> str:
         body = [
             title,
             "",
-            _truncate(why, bw),
+            _truncate_sentence(_first_sentence(why), bw),
             "",
-            f"1. {_truncate(bullet_texts[0], bb)}",
-            f"2. {_truncate(bullet_texts[1], bb)}",
-            f"3. {_truncate(bullet_texts[2], bb)}",
+            f"1. {_truncate_sentence(_first_sentence(bullet_texts[0]), bb)}",
+            f"2. {_truncate_sentence(_first_sentence(bullet_texts[1]), bb)}",
+            f"3. {_truncate_sentence(_first_sentence(bullet_texts[2]), bb)}",
         ]
         if len(bullet_texts) > 3:
-            body.append(f"4. {_truncate(bullet_texts[3], bb)}")
+            body.append(f"4. {_truncate_sentence(_first_sentence(bullet_texts[3]), bb)}")
         body += [
             "",
             "### Вывод",
-            _truncate(concl, bc),
+            _truncate_sentence(_first_sentence(concl), bc),
             "",
-            _truncate(cta, bt),
+            _truncate_sentence(_first_sentence(cta), bt),
             "",
             hashtags,
         ]
@@ -256,9 +288,17 @@ def _validate_ru_post(text: str, *, include_link: bool, url: str, require_footer
     if ratio < 0.55:
         errs.append(f"not russian enough (cyr ratio={ratio:.2f}, need >=0.55)")
 
-    numbered = len(re.findall(r"(?m)^\s*[1-9]\.\s+", t))
-    if numbered < 3:
-        errs.append(f"not enough numbered points ({numbered}), need >= 3")
+    numbered_lines = re.findall(r"(?m)^\s*[1-9]\.\s*(.+)$", t)
+    for idx, line in enumerate(numbered_lines[:5], start=1):
+        ln = _cleanup_post_text(line)
+        if len(ln) < 35:
+            errs.append(f"point {idx} too short ({len(ln)}), need >= 35 chars")
+        if not re.search(r"[.!?]$", ln):
+            errs.append(f"point {idx} has no sentence ending punctuation")
+
+    sentence_count = len(re.findall(r"[.!?](?:\s|$)", t))
+    if sentence_count < 5:
+        errs.append(f"not enough complete sentences ({sentence_count}), need >= 5")
 
     if "### Вывод" not in t:
         errs.append("missing section: ### Вывод")
@@ -289,7 +329,7 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
         "ОБЯЗАТЕЛЬНАЯ СТРУКТУРА (строго в этом порядке):\n"
         "1) Заголовок (1 строка).\n"
         "2) Абзац: Почему это важно: ... (1-2 предложения).\n"
-        "3) Нумерованные пункты по смыслу: минимум 3 и максимум 5 (каждый 1-2 предложения).\n"
+        "3) Ключевые тезисы по смыслу: 3-5 коротких смысловых фрагментов (можно оформить нумерованными пунктами или короткими абзацами). Каждый фрагмент должен быть законченным предложением.\n"
         "4) Блок '### Вывод' и минимум 1 предложение.\n"
         "5) Одна строка с приглашением к обсуждению.\n"
         "6) Последняя строка: 'Хэштеги: ' и минимум 5 релевантных хэштегов.\n\n"
@@ -367,8 +407,6 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
 
     out = _cleanup_post_text(out)
     out = _normalize_dashes(out)
-    if len(out) > 860:
-        out = _compact_ru_post_for_limit(out, max_len=760)
     out = _append_ru_site_footer(out, url)
     if len(out) > 1024:
         core = out
@@ -393,7 +431,7 @@ def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: st
         raise RuntimeError("Telegram text is empty")
 
     # One-message mode with image inside post: sendPhoto + caption
-    caption_raw = _truncate(full_text, 1000)
+    caption_raw = _truncate(full_text, 1024)
     caption_html = _to_telegram_html(caption_raw)
 
     if photo_abs_path and os.path.exists(photo_abs_path):
