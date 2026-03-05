@@ -9,13 +9,12 @@ from dataclasses import dataclass
 from typing import Any
 
 
-
-
 FALLBACK_MODELS = [
     'gemini-2.5-flash-image',
     'gemini-2.0-flash-preview-image-generation',
     'gemini-2.0-flash-exp-image-generation',
 ]
+
 
 @dataclass
 class GeneratedImage:
@@ -96,6 +95,62 @@ def _is_square_bytes(img_bytes: bytes, mime: str) -> bool:
                 pass
 
 
+def _to_webp_bytes(img_bytes: bytes) -> bytes:
+    """Convert source image bytes to WebP via ImageMagick."""
+    in_tmp = None
+    out_tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix="cf-webp-in-", suffix=".img", delete=False) as f_in:
+            f_in.write(img_bytes)
+            in_tmp = f_in.name
+        with tempfile.NamedTemporaryFile(prefix="cf-webp-out-", suffix=".webp", delete=False) as f_out:
+            out_tmp = f_out.name
+
+        p = subprocess.run(
+            ["/usr/bin/convert", in_tmp, "-strip", "-quality", "86", out_tmp],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if p.returncode != 0:
+            raise RuntimeError((p.stderr or p.stdout or "convert failed").strip())
+
+        with open(out_tmp, "rb") as f:
+            return f.read()
+    finally:
+        for pth in (in_tmp, out_tmp):
+            if pth and os.path.exists(pth):
+                try:
+                    os.remove(pth)
+                except Exception:
+                    pass
+
+
+def _convert_file_to_webp(path: str) -> str:
+    """Convert existing local image file to .webp and return new basename."""
+    if not path or not os.path.exists(path):
+        return os.path.basename(path or "")
+
+    base_no_ext, ext = os.path.splitext(path)
+    if ext.lower() == ".webp":
+        return os.path.basename(path)
+
+    webp_path = f"{base_no_ext}.webp"
+    if not os.path.exists(webp_path):
+        p = subprocess.run(
+            ["/usr/bin/convert", path, "-strip", "-quality", "86", webp_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if p.returncode != 0:
+            raise RuntimeError((p.stderr or p.stdout or "convert failed").strip())
+
+    return os.path.basename(webp_path)
+
+
 def gemini_generate_image(*, api_key: str, model: str, prompt: str, timeout_s: int = 180) -> tuple[bytes, str]:
     # Gemini API: models/{model}:generateContent
     mid = _model_id(model)
@@ -174,18 +229,23 @@ def ensure_hero_and_inline_images(
     # 1) Hero
     hero_hint = os.path.basename(hero_image_hint) if hero_image_hint else ""
     if hero_hint and os.path.exists(os.path.join(blog_dir, hero_hint)) and _is_square_path(os.path.join(blog_dir, hero_hint)):
-        hero_filename = hero_hint
+        hero_abs = os.path.join(blog_dir, hero_hint)
+        if hero_hint.lower().endswith(".webp"):
+            hero_filename = hero_hint
+        else:
+            hero_filename = _convert_file_to_webp(hero_abs)
+            generated.append(GeneratedImage(filename=hero_filename, abs_path=os.path.join(blog_dir, hero_filename)))
     else:
         # Deterministic hero name.
         hero_basename = f"{_slugify(slug)}-hero"
 
-        # If no API key, fall back to existing assets (logo.png) without failing publish.
+        # If no API key, fall back to existing assets without failing publish.
         if not api_key:
             hero_filename = hero_hint or "logo.png"
         else:
             prompt = (
                 "Create a photorealistic hero image for a blog article. "
-                "Style: modern, cinematic lighting, clean corporate, UGC-advertising vibe, no text, no logos, no watermarks. "
+                "Style: modern, cinematic lighting, clean corporate, UGC-advertising vibe, no text, no logos, no watermarks. Fill the entire frame edge-to-edge; no borders, no frames, no letterboxing, no pillarboxing, no padding, no margins, no blank strips. "
                 "Aspect ratio: 1:1 (square). "
                 f"Topic: {topic}. Title: {title}. Category: {category}."
             )
@@ -205,10 +265,11 @@ def ensure_hero_and_inline_images(
                     break
             if last_err is not None:
                 raise last_err
-            ext = _ext_from_mime(mime)
-            hero_filename = f"{hero_basename}.{ext}"
+
+            hero_filename = f"{hero_basename}.webp"
             hero_path = os.path.join(blog_dir, hero_filename)
             if not os.path.exists(hero_path):
+                img_bytes = _to_webp_bytes(img_bytes)
                 with open(hero_path, "wb") as f:
                     f.write(img_bytes)
                 generated.append(GeneratedImage(filename=hero_filename, abs_path=hero_path))
@@ -232,8 +293,19 @@ def ensure_hero_and_inline_images(
 
     # Find alt text near each src (best-effort)
     for idx, src in enumerate(img_srcs, start=1):
-        abs_existing = os.path.join(blog_dir, os.path.basename(src))
+        src_name = os.path.basename(src)
+        abs_existing = os.path.join(blog_dir, src_name)
         if os.path.exists(abs_existing):
+            if src_name.lower().endswith(".webp"):
+                continue
+            new_name = _convert_file_to_webp(abs_existing)
+            generated.append(GeneratedImage(filename=new_name, abs_path=os.path.join(blog_dir, new_name)))
+            content_html = re.sub(
+                r"(<img\b[^>]*?\bsrc=)(\"" + re.escape(src) + r"\"|'" + re.escape(src) + r"')",
+                "\\1\"" + new_name + "\"",
+                content_html,
+                flags=re.IGNORECASE,
+            )
             continue
 
         if not api_key:
@@ -271,9 +343,10 @@ def ensure_hero_and_inline_images(
                 break
         if last_err is not None:
             raise last_err
-        ext = _ext_from_mime(mime)
-        new_name = f"{_slugify(slug)}-img-{idx}.{ext}"
+
+        new_name = f"{_slugify(slug)}-img-{idx}.webp"
         out_path = os.path.join(blog_dir, new_name)
+        img_bytes = _to_webp_bytes(img_bytes)
         with open(out_path, "wb") as f:
             f.write(img_bytes)
         generated.append(GeneratedImage(filename=new_name, abs_path=out_path))
