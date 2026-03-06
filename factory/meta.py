@@ -9,10 +9,19 @@ def _strip_tags(s: str) -> str:
     return re.sub(r"<[^>]+>", "", s or "").strip()
 
 
+DANGLING_WORDS = {
+    "and", "or", "with", "for", "to", "of", "in", "on", "at", "from", "by", "as",
+    "und", "et", "y", "e", "de", "del", "la", "le", "da", "di", "con",
+    "и", "с", "на", "по", "для", "а", "или",
+    "perfect", "discover", "explore", "key", "top", "best", "including",
+}
+
+
 def _truncate(s: str, max_len: int, min_len: int) -> str:
     if len(s) <= max_len:
         return s
 
+    # Base trim to max length.
     head = s[:max_len]
 
     # Prefer cutting on a word boundary, but only if we can stay >= min_len.
@@ -20,21 +29,39 @@ def _truncate(s: str, max_len: int, min_len: int) -> str:
     if last_space >= min_len:
         head = head[:last_space]
 
-    return head.rstrip(" ,;:-")
+    head = head.rstrip(" ,;:-")
+
+    # Avoid dangling conjunction/preposition at the end (e.g., "... and").
+    # Guard: never let this cleanup drop below min_len.
+    words = head.split()
+    while len(words) > 1 and words[-1].lower() in DANGLING_WORDS:
+        candidate = " ".join(words[:-1]).rstrip(" ,;:-")
+        if len(candidate) < min_len:
+            break
+        words = words[:-1]
+    out = " ".join(words).rstrip(" ,;:-")
+
+    # Safety net: if stylistic cleanup made text too short, keep hard max trim.
+    if len(out) < min_len:
+        out = s[:max_len].rstrip(" ,;:-")
+        if len(out) < min_len:
+            out = s[:min_len].rstrip(" ,;:-")
+
+    return out
 
 
 def fit_meta_description(desc: str | None, *, fallback: str | None = None) -> str:
-    """Force meta description to 155-160 chars (PDF requirement)."""
+    """Normalize meta description for clean SEO snippet without truncation artifacts."""
 
     s = _collapse_ws(_strip_tags(desc or ""))
     if not s:
         s = _collapse_ws(_strip_tags(fallback or ""))
 
     if not s:
-        s = "Answer-first guide with benchmarks, examples, and checklists for 2026, including step-by-step tactics and common pitfalls to avoid."
+        s = "Practical 2026 guide covering regions, grapes, producers, and food pairings with clear recommendations for tasting and buying."
 
-    MIN_LEN = 155
-    MAX_LEN = 160
+    MIN_LEN = 145
+    MAX_LEN = 158
 
     if MIN_LEN <= len(s) <= MAX_LEN:
         return s
@@ -42,28 +69,6 @@ def fit_meta_description(desc: str | None, *, fallback: str | None = None) -> st
     if len(s) > MAX_LEN:
         return _truncate(s, MAX_LEN, MIN_LEN)
 
-    # Too short: deterministically enrich and then trim into the spec.
-    base = s.rstrip(". ")
-
-    enriched = (
-        f"{base}: answer-first guide with benchmarks, examples, and checklists for 2026, including steps, pitfalls, and best practices."
-    )
-    enriched = _collapse_ws(enriched)
-
-    if len(enriched) < MIN_LEN:
-        enriched = _collapse_ws(enriched + " Covers creative testing, measurement, and execution.")
-
-    # If still short, pad with a short token until we cross MIN_LEN, then trim.
-    while len(enriched) < MIN_LEN:
-        enriched = _collapse_ws(enriched.rstrip(". ") + " In 2026.")
-
-    if len(enriched) > MAX_LEN:
-        enriched = _truncate(enriched, MAX_LEN, MIN_LEN)
-
-    # Ensure bounds even in worst-case edge scenarios.
-    if len(enriched) < MIN_LEN:
-        enriched = _collapse_ws(enriched + " In 2026.")
-        if len(enriched) > MAX_LEN:
-            enriched = _truncate(enriched, MAX_LEN, MIN_LEN)
-
-    return enriched
+    # If shorter than target, keep original meaning (no synthetic padding).
+    # This prevents template-like tails and keeps language natural.
+    return s

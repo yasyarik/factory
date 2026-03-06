@@ -273,10 +273,10 @@ def _validate_ru_post(text: str, *, include_link: bool, url: str, require_footer
     if not t:
         return ["empty result"]
 
-    if len(t) < 600:
-        errs.append(f"too short ({len(t)} chars), expected >= 600")
-    if len(t) > 1024:
-        errs.append(f"too long ({len(t)} chars), expected <= 1024")
+    if len(t) < 1400:
+        errs.append(f"too short ({len(t)} chars), expected >= 1400")
+    if len(t) > 3200:
+        errs.append(f"too long ({len(t)} chars), expected <= 3200")
 
     if "—" in t or "–" in t:
         errs.append("contains long dash")
@@ -288,28 +288,9 @@ def _validate_ru_post(text: str, *, include_link: bool, url: str, require_footer
     if ratio < 0.55:
         errs.append(f"not russian enough (cyr ratio={ratio:.2f}, need >=0.55)")
 
-    numbered_lines = re.findall(r"(?m)^\s*[1-9]\.\s*(.+)$", t)
-    for idx, line in enumerate(numbered_lines[:5], start=1):
-        ln = _cleanup_post_text(line)
-        if len(ln) < 35:
-            errs.append(f"point {idx} too short ({len(ln)}), need >= 35 chars")
-        if not re.search(r"[.!?]$", ln):
-            errs.append(f"point {idx} has no sentence ending punctuation")
-
     sentence_count = len(re.findall(r"[.!?](?:\s|$)", t))
-    if sentence_count < 5:
-        errs.append(f"not enough complete sentences ({sentence_count}), need >= 5")
-
-    if "### Вывод" not in t:
-        errs.append("missing section: ### Вывод")
-
-    hashtags_match = re.search(r"(?im)^Хэштеги\s*:\s*(.+)$", t)
-    if not hashtags_match:
-        errs.append("missing hashtags line")
-    else:
-        tags = re.findall(r"#[\w\-]+", hashtags_match.group(1))
-        if len(tags) < 5:
-            errs.append(f"not enough hashtags ({len(tags)}), need >= 5")
+    if sentence_count < 8:
+        errs.append(f"not enough complete sentences ({sentence_count}), need >= 8")
 
     if require_footer:
         ru_url = _ru_article_url(url)
@@ -324,18 +305,17 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
     base_prompt = (
         "Ты пишешь Telegram-пост по статье. Верни ТОЛЬКО готовый текст поста на русском, без пояснений. "
         "Это нейтральный образовательный материал о продукте и контенте, без призывов к употреблению алкоголя. "
-        "Сохрани ключевые факты и практическую пользу из SOURCE. Названия и бренды не переводи. "
-        "Не используй длинное тире, только обычный дефис.\n\n"
-        "ОБЯЗАТЕЛЬНАЯ СТРУКТУРА (строго в этом порядке):\n"
-        "1) Заголовок (1 строка).\n"
-        "2) Абзац: Почему это важно: ... (1-2 предложения).\n"
-        "3) Ключевые тезисы по смыслу: 3-5 коротких смысловых фрагментов (можно оформить нумерованными пунктами или короткими абзацами). Каждый фрагмент должен быть законченным предложением.\n"
-        "4) Блок '### Вывод' и минимум 1 предложение.\n"
-        "5) Одна строка с приглашением к обсуждению.\n"
-        "6) Последняя строка: 'Хэштеги: ' и минимум 5 релевантных хэштегов.\n\n"
-        "ЖЕСТКИЕ ОГРАНИЧЕНИЯ ПО ДЛИНЕ: итог должен быть 600-900 символов. "
-        "Сначала напиши черновик, потом сократи/дополни до диапазона 600-900, и только затем выдай финал. "
-        "Запрещено выдавать меньше 600 символов или больше 900 символов."
+        "Названия и бренды не переводи. Не используй длинное тире, только обычный дефис.\n\n"
+        "ФОРМАТ И СТРУКТУРА:\n\n"
+        "Мини-статья максимум на 5-6 небольших абзацев.\n\n"
+        "Связный цельный текст (завязка -> ключевая суть -> вывод).\n\n"
+        "Без шаблонных списков, без нумерации, без повторяющихся фраз.\n\n"
+        "В конце добавь 5-8 релевантных хэштегов в одну строку.\n\n"
+        "ЖЕСТКИЕ ОГРАНИЧЕНИЯ (КРИТИЧЕСКИ ВАЖНО):\n\n"
+        "Итоговый объем всего текста: не более 500 слов.\n\n"
+        "Выдели только самые главные мысли из SOURCE. Безжалостно удаляй всю воду, долгие вступления, "
+        "лишние примеры и второстепенные детали.\n\n"
+        "Текст должен быть очень сжатым, но мысль не должна обрываться."
     )
 
     user = f"TITLE: {title}\nDESCRIPTION: {description}\nSOURCE:\n{body}\n"
@@ -348,7 +328,7 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
     for attempt in range(1, 5):
         payload: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": base_prompt + "\n\n" + feedback + "\n" + user}]}],
-            "generationConfig": {"temperature": 0.35, "maxOutputTokens": 2048, "thinkingConfig": {"thinkingBudget": 0}},
+            "generationConfig": {"temperature": 0.35, "thinkingConfig": {"thinkingBudget": 0}},
         }
         try:
             r = requests.post(url_api, json=payload, timeout=55)
@@ -363,15 +343,10 @@ def _generate_ru_post(api_key: str, model: str, *, title: str, description: str,
             if not errors:
                 return text
 
-            
-            non_long_errors = [e for e in errors if not e.startswith("too long") ]
-            if not non_long_errors:
-                return text
-
             feedback = (
                 "Исправь полностью. Ошибки в прошлом варианте:\n- "
-                + "\n- ".join(non_long_errors)
-                + "\nСделай новый корректный вариант строго по структуре."
+                + "\n- ".join(errors)
+                + "\nСделай новый вариант как цельную мини-статью без повторов."
             )
             last_err = RuntimeError("; ".join(errors))
         except Exception as e:
@@ -408,13 +383,10 @@ def build_telegram_post_ru(*, title: str, description: str, content_html: str, u
     out = _cleanup_post_text(out)
     out = _normalize_dashes(out)
     out = _append_ru_site_footer(out, url)
-    if len(out) > 1024:
-        core = out
-        footer = f"С полной версией статьи можно ознакомиться на сайте: {_ru_article_url(url)}"
-        if footer and footer in core:
-            core = core.replace(footer, "").rstrip()
-        core = _compact_ru_post_for_limit(core, max_len=700)
-        out = _append_ru_site_footer(core, url)
+    if len(out) > 3600:
+        # Keep message within Telegram sendMessage hard limit with a safety margin.
+        out = _truncate_sentence(out, 3600)
+        out = _append_ru_site_footer(out, url)
 
     final_errors = _validate_ru_post(out, include_link=include_link, url=url, require_footer=True)
     if final_errors:
@@ -430,41 +402,16 @@ def telegram_send(*, bot_token: str, chat_id: str, text: str, photo_abs_path: st
     if not full_text:
         raise RuntimeError("Telegram text is empty")
 
-    # One-message mode with image inside post: sendPhoto + caption
-    caption_raw = _truncate(full_text, 1024)
+    # One-message text mode (no photo): keeps full article teaser and allows URL preview.
+    caption_raw = _truncate(full_text, 3900)
     caption_html = _to_telegram_html(caption_raw)
-
-    if photo_abs_path and os.path.exists(photo_abs_path):
-        with open(photo_abs_path, "rb") as f:
-            rp = requests.post(
-                base + "/sendPhoto",
-                data={
-                    "chat_id": chat_id,
-                    "caption": caption_html,
-                    "parse_mode": "HTML",
-                },
-                files={"photo": f},
-                timeout=90,
-            )
-        if rp.status_code >= 400:
-            raise RuntimeError(f"sendPhoto failed: {rp.status_code} {rp.text}")
-        sent = rp.json()
-        return {
-            "photo": sent,
-            "message": sent,
-            "messages": [sent],
-            "mode": "photo_caption_single",
-            "sent_text": caption_raw,
-        }
-
-    # Fallback: still one message
     rm = requests.post(
         base + "/sendMessage",
         data={
             "chat_id": chat_id,
             "text": caption_html,
             "parse_mode": "HTML",
-            "disable_web_page_preview": True,
+            "disable_web_page_preview": False,
         },
         timeout=60,
     )

@@ -447,6 +447,11 @@
               </div>
               <div class="row">
                 <input id="setGeminiKey" style="flex:1; min-width:260px" placeholder="GEMINI_API_KEY" />
+                <input id="setGeminiBackupKey" style="flex:1; min-width:260px" placeholder="GEMINI_API_KEY_BACKUP" />
+                <select id="setGeminiActiveKey" style="width:180px">
+                  <option value="primary">Gemini active: primary</option>
+                  <option value="backup">Gemini active: backup</option>
+                </select>
                 <input id="setGeminiTextModel" style="flex:1; min-width:230px" placeholder="GEMINI_TEXT_MODEL (default gemini-2.5-flash)" />
                 <input id="setGeminiImageModel" style="flex:1; min-width:230px" placeholder="GEMINI_IMAGE_MODEL (default gemini-2.5-flash-image)" />
               </div>
@@ -456,6 +461,7 @@
                 <label class="pill"><input type="checkbox" id="clrTumblrSecret" /> clear Tumblr secret</label>
                 <label class="pill"><input type="checkbox" id="clrTwToken" /> clear all X credentials</label>
                 <label class="pill"><input type="checkbox" id="clrGeminiKey" /> clear Gemini key</label>
+                <label class="pill"><input type="checkbox" id="clrGeminiBackupKey" /> clear Gemini backup key</label>
               </div>
               <div class="row" style="margin-top:4px;">
                 <button class="primary" id="socialLoadBtn">Load current</button>
@@ -621,6 +627,7 @@
           if (el('setTumblrKey')) el('setTumblrKey').value = v.TUMBLR_CONSUMER_KEY || '';
           if (el('setTumblrBlog')) el('setTumblrBlog').value = v.TUMBLR_BLOG_HOSTNAME || '';
           if (el('setGeminiImageModel')) el('setGeminiImageModel').value = v.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
+          if (el('setGeminiActiveKey')) el('setGeminiActiveKey').value = (v.GEMINI_ACTIVE_KEY || 'primary');
           if (el('setTwApiKey')) el('setTwApiKey').value = v.TWITTER_API_KEY || '';
 
           if (el('setLiClientSecret')) el('setLiClientSecret').placeholder = (m.LINKEDIN_CLIENT_SECRET && m.LINKEDIN_CLIENT_SECRET.hasValue) ? ('saved: ' + m.LINKEDIN_CLIENT_SECRET.value) : 'LINKEDIN_CLIENT_SECRET (empty)';
@@ -630,12 +637,15 @@
           if (el('setTwAccessToken')) el('setTwAccessToken').placeholder = (m.TWITTER_ACCESS_TOKEN && m.TWITTER_ACCESS_TOKEN.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN.value) : 'Access Token (empty)';
           if (el('setTwAccessTokenSecret')) el('setTwAccessTokenSecret').placeholder = (m.TWITTER_ACCESS_TOKEN_SECRET && m.TWITTER_ACCESS_TOKEN_SECRET.hasValue) ? ('saved: ' + m.TWITTER_ACCESS_TOKEN_SECRET.value) : 'Access Token Secret (empty)';
           if (el('setGeminiKey')) el('setGeminiKey').placeholder = (m.GEMINI_API_KEY && m.GEMINI_API_KEY.hasValue) ? ('saved: ' + m.GEMINI_API_KEY.value) : 'GEMINI_API_KEY (empty)';
+          if (el('setGeminiBackupKey')) el('setGeminiBackupKey').placeholder = (m.GEMINI_API_KEY_BACKUP && m.GEMINI_API_KEY_BACKUP.hasValue) ? ('saved: ' + m.GEMINI_API_KEY_BACKUP.value) : 'GEMINI_API_KEY_BACKUP (empty)';
 
           var tgState = (m.TELEGRAM_BOT_TOKEN && m.TELEGRAM_BOT_TOKEN.hasValue) ? 'saved' : 'empty';
           var tuState = (m.TUMBLR_CONSUMER_SECRET && m.TUMBLR_CONSUMER_SECRET.hasValue) ? 'saved' : 'empty';
           var liState = (m.LINKEDIN_CLIENT_SECRET && m.LINKEDIN_CLIENT_SECRET.hasValue) ? 'saved' : 'empty';
           var gmState = (m.GEMINI_API_KEY && m.GEMINI_API_KEY.hasValue) ? 'saved' : 'empty';
-          _setSocialStatus('loaded · TG token: ' + tgState + ' · Tumblr secret: ' + tuState + ' · LI secret: ' + liState + ' · Gemini key: ' + gmState);
+          var gmBackup = (m.GEMINI_API_KEY_BACKUP && m.GEMINI_API_KEY_BACKUP.hasValue) ? 'saved' : 'empty';
+          var gmActive = (v.GEMINI_ACTIVE_KEY || 'primary');
+          _setSocialStatus('loaded · TG token: ' + tgState + ' · Tumblr secret: ' + tuState + ' · LI secret: ' + liState + ' · Gemini: ' + gmState + '/' + gmBackup + ' · active=' + gmActive);
         } catch (e) {
           _setSocialStatus('load failed');
           alert(String((e && e.message) || e));
@@ -654,6 +664,7 @@
           TUMBLR_BLOG_HOSTNAME: (el('setTumblrBlog') && el('setTumblrBlog').value || '').trim(),
           GEMINI_TEXT_MODEL: (el('setGeminiTextModel') && el('setGeminiTextModel').value || '').trim(),
           GEMINI_IMAGE_MODEL: (el('setGeminiImageModel') && el('setGeminiImageModel').value || '').trim(),
+          GEMINI_ACTIVE_KEY: (el('setGeminiActiveKey') && el('setGeminiActiveKey').value || 'primary').trim(),
           TWITTER_API_KEY: (el('setTwApiKey') && el('setTwApiKey').value || '').trim(),
         };
 
@@ -664,6 +675,7 @@
         var twAccessToken = (el('setTwAccessToken') && el('setTwAccessToken').value || '').trim();
         var twAccessTokenSecret = (el('setTwAccessTokenSecret') && el('setTwAccessTokenSecret').value || '').trim();
         var geminiKey = (el('setGeminiKey') && el('setGeminiKey').value || '').trim();
+        var geminiBackupKey = (el('setGeminiBackupKey') && el('setGeminiBackupKey').value || '').trim();
 
         if (liSecret) values.LINKEDIN_CLIENT_SECRET = liSecret;
         if (tgToken) values.TELEGRAM_BOT_TOKEN = tgToken;
@@ -672,6 +684,7 @@
         if (twAccessToken) values.TWITTER_ACCESS_TOKEN = twAccessToken;
         if (twAccessTokenSecret) values.TWITTER_ACCESS_TOKEN_SECRET = twAccessTokenSecret;
         if (geminiKey) values.GEMINI_API_KEY = geminiKey;
+        if (geminiBackupKey) values.GEMINI_API_KEY_BACKUP = geminiBackupKey;
 
         var clear = [];
         if (el('clrLiClientSecret') && el('clrLiClientSecret').checked) clear.push('LINKEDIN_CLIENT_SECRET');
@@ -685,6 +698,7 @@
           clear.push('TWITTER_ACCESS_TOKEN_SECRET');
         }
         if (el('clrGeminiKey') && el('clrGeminiKey').checked) clear.push('GEMINI_API_KEY');
+        if (el('clrGeminiBackupKey') && el('clrGeminiBackupKey').checked) clear.push('GEMINI_API_KEY_BACKUP');
 
         try {
           _setSocialStatus('saving...');
@@ -701,11 +715,13 @@
           if (el('setTwAccessToken')) el('setTwAccessToken').value = '';
           if (el('setTwAccessTokenSecret')) el('setTwAccessTokenSecret').value = '';
           if (el('setGeminiKey')) el('setGeminiKey').value = '';
+          if (el('setGeminiBackupKey')) el('setGeminiBackupKey').value = '';
           if (el('clrLiClientSecret')) el('clrLiClientSecret').checked = false;
           if (el('clrTgToken')) el('clrTgToken').checked = false;
           if (el('clrTumblrSecret')) el('clrTumblrSecret').checked = false;
           if (el('clrTwToken')) el('clrTwToken').checked = false;
           if (el('clrGeminiKey')) el('clrGeminiKey').checked = false;
+          if (el('clrGeminiBackupKey')) el('clrGeminiBackupKey').checked = false;
 
           await loadSocialSettings();
           await loadLinkedInStatus();

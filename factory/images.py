@@ -202,6 +202,31 @@ def gemini_generate_image(*, api_key: str, model: str, prompt: str, timeout_s: i
     raise RuntimeError(f"No inline image data in response: {data}")
 
 
+
+
+def _country_hint_from_text(topic: str, title: str, category: str = "") -> str:
+    text = f"{topic} {title} {category}".lower()
+    countries = [
+        "argentina", "australia", "austria", "brazil", "chile", "france", "georgia", "germany",
+        "greece", "hungary", "italy", "mexico", "new zealand", "portugal", "romania",
+        "south africa", "spain", "switzerland", "united states", "moldova", "usa"
+    ]
+    for c in countries:
+        if c in text:
+            return "United States" if c == "usa" else c.title()
+    return ""
+
+
+def _country_visual_hint(topic: str, title: str, category: str = "") -> str:
+    country = _country_hint_from_text(topic, title, category)
+    if not country:
+        return ""
+    return (
+        f"Country identity: {country}. Include subtle, realistic regional cues relevant to {country} "
+        "(landscape, vineyard architecture, terroir textures, table setting, climate mood), "
+        "while staying photorealistic and documentary-style. "
+    )
+
 def ensure_hero_and_inline_images(
     *,
     api_key: str | None,
@@ -245,9 +270,11 @@ def ensure_hero_and_inline_images(
         else:
             prompt = (
                 "Create a photorealistic hero image for a blog article. "
-                "Style: modern, cinematic lighting, clean corporate, UGC-advertising vibe, no text, no logos, no watermarks. Fill the entire frame edge-to-edge; no borders, no frames, no letterboxing, no pillarboxing, no padding, no margins, no blank strips. "
+                "Style: modern, cinematic lighting, natural texture, photographic grain, high-detail gradients, UGC-advertising vibe, no text, no logos, no watermarks, no illustration, no vector, no posterized look. Fill the entire frame edge-to-edge; no borders, no frames, no letterboxing, no pillarboxing, no padding, no margins, no blank strips. "
                 "Aspect ratio: 1:1 (square). "
-                f"Topic: {topic}. Title: {title}. Category: {category}."
+                f"Topic: {topic}. Title: {title}. Category: {category}. "
+                + _country_visual_hint(topic, title, category)
+                + "Avoid generic wine clipart look; prefer authentic place-specific visual storytelling."
             )
             last_err = None
             for gen_attempt in range(1, 5):
@@ -321,9 +348,11 @@ def ensure_hero_and_inline_images(
 
         prompt = (
             "Create a photorealistic supporting image for a blog article section. "
-            "Style: modern, cinematic lighting, clean corporate, no text, no logos, no watermarks. "
+            "Style: modern, cinematic lighting, natural texture, photographic grain, high-detail gradients, no text, no logos, no watermarks, no illustration, no vector, no posterized look. "
             "Aspect ratio: 1:1 (square). "
             f"Context topic: {topic}. "
+            + _country_visual_hint(topic, title, category)
+            + "Avoid generic wine clipart look; keep scene grounded in real place context. "
             + (f"Image description: {alt}." if alt else "")
         )
 

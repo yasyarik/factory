@@ -634,6 +634,44 @@ def _rewrite_section_blog_artifacts(html: str, section: str, slug: str, locale: 
     return out
 
 
+
+def _rewrite_blog_inline_img_srcs(html: str) -> str:
+    out = html or ""
+
+    # Blog posts in /<locale>/blog/*.html must reference shared media in /blog/.
+    # Relative sources like "slug-img-1.webp" break on localized routes.
+    def _img_src_to_blog(m: re.Match[str]) -> str:
+        src = (m.group(1) or "").strip()
+        if not src:
+            return m.group(0)
+        low = src.lower()
+        if low.startswith("http://") or low.startswith("https://") or low.startswith("data:"):
+            return m.group(0)
+        if src.startswith("/"):
+            return m.group(0)
+        return m.group(0).replace(src, f"/blog/{src}")
+
+    return re.sub(r'<img[^>]*\bsrc="([^"]+)"', _img_src_to_blog, out, flags=re.IGNORECASE)
+
+
+
+def _sanitize_desc_tail(s: str) -> str:
+    t = re.sub(r"\s+", " ", (s or "").strip())
+    if not t:
+        return t
+    dangling = {
+        "and", "or", "with", "for", "to", "of", "in", "on", "at", "from", "by", "as",
+        "und", "et", "y", "e", "de", "del", "la", "le", "da", "di", "con",
+        "и", "с", "на", "по", "для", "а", "или",
+    }
+    parts = t.split(" ")
+    while len(parts) > 1 and parts[-1].strip(" ,;:-").lower() in dangling:
+        parts.pop()
+    out = " ".join(parts).rstrip(" ,;:-")
+    if out and out[-1] not in ".!?":
+        out += "."
+    return out
+
 def _render_seo_section_html(
     *,
     title: str,
@@ -697,20 +735,28 @@ def _render_seo_section_html(
             + "</ul></aside>"
         )
     robots = "noindex,nofollow" if noindex else "index,follow"
+    raw_desc = fit_meta_description(description or "", fallback=title or "")
+    raw_desc = _sanitize_desc_tail(raw_desc)
     t = html_lib.escape(title or "")
-    d = html_lib.escape(description or "")
+    d = html_lib.escape(raw_desc)
     updated = html_lib.escape((updated_at or "")[:10] or utcnow_iso()[:10])
     share_title = urllib.parse.quote(title or "")
     share_url = urllib.parse.quote(page_url)
     share_block = (
-        '<section class="share-section"><h3>Share</h3><div class="share-links">'
-        + f'<a href="https://www.linkedin.com/sharing/share-offsite/?url={share_url}" target="_blank" rel="noreferrer">LinkedIn</a>'
-        + f'<a href="https://twitter.com/intent/tweet?url={share_url}&text={share_title}" target="_blank" rel="noreferrer">X</a>'
-        + f'<a href="https://www.facebook.com/sharer/sharer.php?u={share_url}" target="_blank" rel="noreferrer">Facebook</a>'
-        + f'<a href="https://api.whatsapp.com/send?text={share_title}%20{share_url}" target="_blank" rel="noreferrer">WhatsApp</a>'
-        + f'<a href="https://t.me/share/url?url={share_url}&text={share_title}" target="_blank" rel="noreferrer">Telegram</a>'
+        '<section class="share-section"><div class="share-label">Share</div><div class="share-group">'
+        + f'<a class="share-icon-btn" href="https://www.linkedin.com/sharing/share-offsite/?url={share_url}" target="_blank" rel="noreferrer" aria-label="Share on LinkedIn" title="LinkedIn">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M6.94 8.5H3.56V19h3.38V8.5zm.22-3.24a1.95 1.95 0 1 0-3.9 0 1.95 1.95 0 0 0 3.9 0zM20.44 13.03V19h-3.36v-5.5c0-1.3-.47-2.2-1.64-2.2-.9 0-1.43.6-1.66 1.18-.09.2-.11.48-.11.76V19H10.3s.04-9.4 0-10.5h3.37v1.49l-.02.03h.02v-.03c.44-.68 1.22-1.65 2.98-1.65 2.17 0 3.8 1.41 3.8 4.44z"/></svg></a>'
+        + f'<a class="share-icon-btn" href="https://twitter.com/intent/tweet?url={share_url}&text={share_title}" target="_blank" rel="noreferrer" aria-label="Share on X" title="X">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M18.9 2H22l-6.8 7.77L23 22h-6.2l-4.85-6.33L6.4 22H3.3l7.27-8.31L1 2h6.36l4.38 5.77L18.9 2zm-1.1 18h1.72L6.44 3.9H4.58L17.8 20z"/></svg></a>'
+        + f'<a class="share-icon-btn" href="https://www.facebook.com/sharer/sharer.php?u={share_url}" target="_blank" rel="noreferrer" aria-label="Share on Facebook" title="Facebook">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13.5 22v-8h2.7l.4-3h-3.1V9.1c0-.9.3-1.6 1.6-1.6h1.7V4.8c-.3 0-1.3-.1-2.5-.1-2.5 0-4.2 1.5-4.2 4.3V11H7.5v3h2.6v8h3.4z"/></svg></a>'
+        + f'<a class="share-icon-btn" href="https://api.whatsapp.com/send?text={share_title}%20{share_url}" target="_blank" rel="noreferrer" aria-label="Share on WhatsApp" title="WhatsApp">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-8.8 14.73L2 22l5.43-1.14A10 10 0 1 0 12 2zm0 18.2c-1.53 0-3.02-.4-4.32-1.17l-.31-.18-3.22.68.69-3.14-.2-.32A8.24 8.24 0 1 1 12 20.2zm4.52-6.18c-.25-.13-1.5-.74-1.73-.83-.23-.08-.4-.12-.58.13-.17.25-.66.83-.81 1-.15.16-.3.19-.56.06-.25-.12-1.06-.39-2.02-1.26-.75-.67-1.25-1.5-1.4-1.75-.15-.25-.02-.39.11-.52.12-.11.25-.3.37-.44.12-.15.16-.25.25-.42.08-.17.04-.31-.02-.44-.06-.13-.58-1.4-.79-1.92-.21-.5-.42-.43-.58-.43h-.5c-.17 0-.44.06-.67.31-.23.25-.88.86-.88 2.1s.9 2.44 1.02 2.61c.12.17 1.77 2.7 4.28 3.79.6.26 1.06.41 1.42.53.6.19 1.15.16 1.58.1.48-.07 1.5-.61 1.71-1.2.21-.6.21-1.11.15-1.2-.06-.09-.23-.15-.48-.28z"/></svg></a>'
+        + f'<a class="share-icon-btn" href="https://t.me/share/url?url={share_url}&text={share_title}" target="_blank" rel="noreferrer" aria-label="Share on Telegram" title="Telegram">'
+        + '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M9.04 15.57 8.66 20c.55 0 .79-.24 1.08-.52l2.6-2.48 5.4 3.95c.99.55 1.69.26 1.96-.92l3.55-16.64h0c.31-1.46-.53-2.03-1.5-1.67L1.7 9.4c-1.42.55-1.4 1.35-.24 1.71l5.12 1.6L18.45 5.3c.56-.34 1.07-.15.65.2"/></svg></a>'
         + '</div></section>'
     )
+
     return f"""<!DOCTYPE html>
 <html lang="{locale}">
 <head>
@@ -723,6 +769,10 @@ def _render_seo_section_html(
   <meta property="og:title" content="{t}"/>
   <meta property="og:description" content="{d}"/>
   <meta property="og:image" content="{origin}{hero_url}"/>
+  <meta name="twitter:card" content="summary_large_image"/>
+  <meta name="twitter:title" content="{t}"/>
+  <meta name="twitter:description" content="{d}"/>
+  <meta name="twitter:image" content="{origin}{hero_url}"/>
   <style>
     :root {{
       --bg-dark:#12070c;
@@ -793,15 +843,17 @@ def _render_seo_section_html(
     .content table {{ width:100%; border-collapse:collapse; margin:14px 0; }}
     .content th,.content td {{ border:1px solid var(--line); padding:10px; text-align:left; }}
     .content blockquote {{ border-left:4px solid var(--accent); margin:20px 0; padding:10px 14px; background:rgba(182,58,90,.12); }}
-    .share-section {{ margin-top:14px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.03); padding:12px; }}
-    .share-section h3 {{ margin:0 0 8px; font-size:15px; color:var(--dim); }}
-    .share-links {{ display:flex; flex-wrap:wrap; gap:8px; }}
-    .share-links a {{ text-decoration:none; color:#fbe9ef; border:1px solid var(--line); padding:7px 10px; border-radius:10px; background:rgba(255,255,255,.02); font-size:13px; }}
-    .share-links a:hover {{ background:rgba(182,58,90,.22); }}
     footer {{ border-top:1px solid var(--glass-border); padding:40px 0; text-align:center; color:var(--dim); font-size:14px; margin-top:28px; }}
     footer a {{ color:var(--dim); text-decoration:none; margin:0 10px; }}
     @media (max-width: 980px) {{ .layout {{ grid-template-columns:1fr; }} .toc {{ position:static; top:auto; max-height:none; }} }}
-    @media (max-width:740px) {{ .logo-img {{ height:52px; }} .nav-links {{ gap:14px; }} main.container {{ padding-top:96px; }} }}
+  
+    .share-section {{ margin-top:60px; padding:28px; background:var(--glass-bg); border:1px solid var(--glass-border); border-radius:24px; display:flex; justify-content:center; align-items:center; gap:20px; flex-direction:column; text-align:center; }}
+    .share-label {{ font-weight:700; font-size:16px; color:#fff; text-align:center; }}
+    .share-group {{ display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }}
+    .share-icon-btn {{ width:44px; height:44px; display:flex; align-items:center; justify-content:center; background:rgba(255,255,255,.05); border:1px solid var(--glass-border); border-radius:12px; color:var(--dim); text-decoration:none; transition:.25s ease; }}
+    .share-icon-btn:hover {{ background:rgba(182,58,90,.32); color:#fff; transform:translateY(-2px); }}
+
+    @media (max-width:740px) {{ html, body {{ overflow-x:hidden; }} *, *::before, *::after {{ box-sizing:border-box; }} .container {{ width:100%; max-width:100%; padding:0 16px; margin:0 auto; }} .nav-container {{ width:100%; max-width:100%; padding:0 16px; overflow:hidden; }} .logo-img {{ height:46px; }} .nav-links {{ gap:10px; min-width:0; max-width:100%; overflow:hidden; }} .countries-list {{ display:none !important; }} main.container {{ width:100%; max-width:100%; padding-top:92px; padding-bottom:24px; overflow-x:hidden; }} .hero, .layout, .toc, .content, .share-section {{ width:100%; max-width:100%; min-width:0; }} .hero {{ border-radius:16px; overflow:hidden; }} .hero-cover {{ width:100%; height:420px; background-size:cover; background-position:center; background-repeat:no-repeat; }} .hero-body {{ padding:14px; }} h1 {{ margin:0; font-size:28px; line-height:1.15; word-break:break-word; }} .desc {{ margin-top:10px; font-size:15px; line-height:1.5; word-break:break-word; }} .meta, .crumbs {{ font-size:12px; word-break:break-word; }} .layout {{ margin-top:14px; display:grid; grid-template-columns:1fr; gap:12px; }} .toc {{ display:block; position:static; top:auto; max-height:none; margin:0; padding:12px; border-radius:14px; overflow:hidden; }} .content {{ padding:18px; border-radius:16px; overflow:hidden; }} .content h2 {{ font-size:24px; margin-top:22px; }} .content h3 {{ font-size:19px; }} .content p, .content li {{ font-size:16px; line-height:1.65; word-break:break-word; }} .content img {{ display:block; max-width:100%; height:auto; }} .content table {{ display:block; width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }} .content th, .content td {{ min-width:140px; }} .share-section {{ margin-top:18px; border-radius:16px; padding:16px; overflow:hidden; }} .share-label {{ text-align:center; }} .share-group {{ width:100%; display:flex; flex-wrap:wrap; justify-content:center; gap:8px; }} .share-icon-btn {{ width:40px; height:40px; flex:0 0 auto; }} footer {{ margin-top:20px; padding:24px 0; }} }}
   </style>
 </head>
 <body>
@@ -2060,11 +2112,11 @@ def _seo_topic_for_entity(entity_type: str, title: str, country: str, region: st
     r = (region or "").strip()
     if et == "country":
         label = c or t
-        topic = f"Wine Guide to {label}: best regions, grapes, producers, and food pairings"
+        topic = f"Create a unique country wine landing page for {label} (2026)"
         category = "Buying Guides"
     elif et == "region":
         label = r or t
-        topic = f"Wine Guide to {label}: key grapes, wineries, style profile, and food pairings"
+        topic = f"Create a unique regional wine landing page for {label} (2026)"
         category = "Wine Regions"
     else:
         label = t or c or r or "wine"
@@ -2242,6 +2294,7 @@ async def seo_pages_run(request: Request):
                         (seo_slug,),
                     ).fetchone()
 
+                should_process = False
                 if ex:
                     job_id = ex[0]
                     skipped += 1
@@ -2259,6 +2312,7 @@ async def seo_pages_run(request: Request):
                         (job_id, topic, seo_slug, category, now, now),
                     )
                     queued += 1
+                    should_process = True
 
                 now = utcnow_iso()
                 conn.execute(
@@ -2280,7 +2334,7 @@ async def seo_pages_run(request: Request):
             continue
 
         job_ids.append(job_id)
-        if action in ("generate", "publish"):
+        if action in ("generate", "publish") and should_process:
             process_ids.append(job_id)
 
     started = 0
@@ -3326,6 +3380,7 @@ def publish(job_id: str):
             noindex=noindex,
         )
     else:
+        content_html = _rewrite_blog_inline_img_srcs(content_html)
         html = render_post_html(
             blog_dir=BLOG_DIR,
             title=title or "",
@@ -3470,6 +3525,7 @@ def publish(job_id: str):
                 noindex=noindex,
             )
         else:
+            loc_content = _rewrite_blog_inline_img_srcs(loc_content)
             loc_html = render_post_html(
                 blog_dir=BLOG_DIR,
                 title=loc_title,
@@ -3525,9 +3581,10 @@ def publish(job_id: str):
             _rebuild_blog_feed_from_index(os.path.join(loc_blog_dir, "index.html"), os.path.join(loc_blog_dir, "feed.json"))
             paths.extend([loc_out_rel, loc_idx_rel, os.path.join(loc, "blog", "feed.json"), f"sitemap-{loc}.xml"])
 
-    # Run the same global image optimization pipeline after writing all HTMLs,
-    # so new article references are rewritten to .webp in one standard place.
-    _optimize_site_images()
+    # Run global image optimization only for regular blog posts.
+    # For SEO country/region pages this is very expensive and not required per publish.
+    if not is_section_page:
+        _optimize_site_images()
 
     # de-dupe while preserving order
     seen = set()

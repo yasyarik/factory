@@ -70,11 +70,17 @@ PRODUCT CONTEXT RULES:
 - If user JSON includes sourceHtml, rewrite that content into a better-structured article following ALL rules.
 - Preserve the core meaning and keep it consistent, but fix structure, add missing elements (links/table/FAQ/images), and tighten wording.
 
+SEO TITLE/DESCRIPTION RULES:
+- Title must be unique and specific for each country/region page.
+- Avoid repetitive templates like "Wine in <Country> 2026: ..." for every page.
+- Use 2-3 concrete entities in title/description when possible (for example region + grape + producer/pairing intent).
+- Description must be coherent and complete; never end with dangling fragments like "and perfect."
+
 OUTPUT JSON SHAPE:
 {
   "slug": "string",
   "title": "string",
-  "description": "string (155-160 chars)",
+  "description": "string (155-160 chars, coherent and complete thought)",
   "category": "string",
   "heroImage": "string (filename only, e.g. scaling-ai.jpg)",
   "contentHtml": "string (HTML fragment)",

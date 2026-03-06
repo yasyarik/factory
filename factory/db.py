@@ -297,6 +297,72 @@ def db_init(path: str) -> None:
         )
 
 
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seo_entities (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              entity_type TEXT NOT NULL,
+              entity_key TEXT NOT NULL,
+              slug TEXT NOT NULL,
+              title TEXT,
+              country TEXT,
+              region TEXT,
+              grape TEXT,
+              winery TEXT,
+              year TEXT,
+              abv TEXT,
+              body TEXT,
+              acidity TEXT,
+              pairings_json TEXT,
+              source_json TEXT,
+              score REAL NOT NULL DEFAULT 0,
+              indexable INTEGER NOT NULL DEFAULT 1,
+              status TEXT NOT NULL DEFAULT 'NEW',
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              UNIQUE(entity_type, entity_key)
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS seo_entities_type_score_idx ON seo_entities(entity_type, score DESC);"
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seo_jobs (
+              id TEXT PRIMARY KEY,
+              entity_id INTEGER NOT NULL,
+              entity_type TEXT NOT NULL,
+              status TEXT NOT NULL,
+              error TEXT,
+              output_path TEXT,
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS seo_jobs_status_created_idx ON seo_jobs(status, created_at);"
+        )
+
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS seo_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              seo_job_id TEXT NOT NULL,
+              ts TEXT NOT NULL,
+              level TEXT NOT NULL,
+              step TEXT NOT NULL,
+              message TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS seo_logs_job_ts_idx ON seo_logs(seo_job_id, ts);"
+        )
+
+
 @contextmanager
 def db_connect(path: str):
     conn = sqlite3.connect(path)

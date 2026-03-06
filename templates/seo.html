@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>YAS SEO Dashboard</title>
+    <style>
+      body{margin:0;background:#0b0714;color:#eee;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+      .wrap{max-width:1160px;margin:0 auto;padding:24px}
+      h1{margin:0 0 8px;font-size:30px}
+      .muted{opacity:.82}
+      .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:14px}
+      .card{border:1px solid rgba(255,255,255,.16);background:rgba(255,255,255,.04);border-radius:14px;padding:14px}
+      .k{font-size:12px;opacity:.8;margin-bottom:4px}
+      .v{font-size:26px;font-weight:800}
+      .row{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+      .btn{display:inline-flex;padding:9px 12px;border-radius:10px;border:1px solid rgba(255,255,255,.24);color:#fff;text-decoration:none;font-weight:700;background:rgba(255,255,255,.06);cursor:pointer}
+      .section{margin-top:16px}
+      table{width:100%;border-collapse:collapse;font-size:13px}
+      th,td{padding:8px;border-bottom:1px solid rgba(255,255,255,.12);text-align:left;vertical-align:top}
+      th{font-size:12px;opacity:.9;text-transform:uppercase;letter-spacing:.04em}
+      .tbl{border:1px solid rgba(255,255,255,.16);border-radius:14px;overflow:auto;background:rgba(255,255,255,.03)}
+      .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+      select,input{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.22);color:#fff;border-radius:10px;padding:8px}
+      .note{font-size:12px;opacity:.85;margin-top:8px;line-height:1.45}
+      .ok{color:#8ad7a2}
+      .warn{color:#ffb37c}
+      @media (max-width: 980px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+      @media (max-width: 640px){.grid{grid-template-columns:1fr}}
+      .runbar{position:sticky;top:10px;z-index:20;border:1px solid rgba(255,255,255,.24);background:rgba(120,18,36,.35);backdrop-filter: blur(6px);border-radius:14px;padding:12px;margin-top:14px}
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>YAS SEO Dashboard</h1>
+      <div class="muted">Country/Region page generation using the same Factory pipeline templates and rules. Build: {{ build }}</div>
+
+
+      <div class="runbar">
+        <div class="controls">
+          <strong>Page Builder</strong>
+          <label>Type
+            <select id="entityTypeTop">
+              <option value="country">Country</option>
+              <option value="region">Region</option>
+            </select>
+          </label>
+          <label>Action
+            <select id="actionTypeTop">
+              <option value="queue">Queue</option>
+              <option value="generate" selected>Generate</option>
+              <option value="publish">Publish</option>
+            </select>
+          </label>
+          <label>Limit
+            <input id="runLimitTop" type="number" min="1" max="100" value="10" />
+          </label>
+          <button class="btn" id="quickRunBtn" type="button">Generate Pages</button>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card"><div class="k">Entities</div><div id="kEntities" class="v">-</div></div>
+        <div class="card"><div class="k">Country Entities</div><div id="kCountry" class="v">-</div></div>
+        <div class="card"><div class="k">Region Entities</div><div id="kRegion" class="v">-</div></div>
+        <div class="card"><div class="k">SEO Jobs</div><div id="kJobs" class="v">-</div></div>
+      </div>
+
+      <div class="section card">
+        <div class="controls">
+          <label>Entity Type
+            <select id="entityType">
+              <option value="country">Country pages</option>
+              <option value="region">Region pages</option>
+            </select>
+          </label>
+          <label>Action
+            <select id="actionType">
+              <option value="queue">Queue only</option>
+              <option value="generate" selected>Generate drafts</option>
+              <option value="publish">Generate + Publish</option>
+            </select>
+          </label>
+          <label>Limit
+            <input id="runLimit" type="number" min="1" max="100" value="10" />
+          </label>
+          <label>Min Score
+            <input id="minScore" type="number" min="0" max="100" step="0.1" value="0" />
+          </label>
+          <button class="btn" id="runBtn" type="button">Run Creation</button>
+          <button class="btn" id="reloadBtn" type="button">Reload Data</button>
+        </div>
+        <div class="note" id="runResult">Ready.</div>
+        <div class="note">Pipeline behavior: keeps Factory text-length rules, auto image generation, and internal linking against existing published blog posts.</div>
+      </div>
+
+      <div class="row">
+        <a class="btn" href="/api/seo/health" target="_blank" rel="noopener noreferrer">Health JSON</a>
+        <a class="btn" href="/">Back To Factory</a>
+      </div>
+
+      <div class="section">
+        <h3>Top SEO Entities</h3>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>ID</th><th>Type</th><th>Slug</th><th>Country</th><th>Region</th><th>Main Grape</th><th>Top Winery</th><th>Score</th><th>Status</th></tr></thead>
+            <tbody id="entitiesBody"><tr><td colspan="9">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="section">
+        <h3>Recent SEO Jobs</h3>
+        <div class="tbl">
+          <table>
+            <thead><tr><th>ID</th><th>Entity ID</th><th>Type</th><th>Task</th><th>SEO Status</th><th>Job Status</th><th>Output</th><th>Updated</th><th>Actions</th><th>Error</th></tr></thead>
+            <tbody id="jobsBody"><tr><td colspan="10">Loading...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      async function loadAll(){
+        const [healthRes, entitiesRes, jobsRes] = await Promise.all([
+          fetch('/api/seo/health').then(r=>r.json()),
+          fetch('/api/seo/entities?limit=1500').then(r=>r.json()),
+          fetch('/api/seo/jobs?limit=150').then(r=>r.json()),
+        ]);
+
+        const entities = entitiesRes.items || [];
+        const jobs = jobsRes.items || [];
+        const countryCount = entities.filter(x => x.entityType === 'country').length;
+        const regionCount = entities.filter(x => x.entityType === 'region').length;
+
+        document.getElementById('kEntities').textContent = String(healthRes.entities ?? entities.length ?? '-');
+        document.getElementById('kCountry').textContent = String(countryCount);
+        document.getElementById('kRegion').textContent = String(regionCount);
+        document.getElementById('kJobs').textContent = String(healthRes.jobs ?? jobs.length ?? '-');
+
+        const eBody = document.getElementById('entitiesBody');
+        if(!entities.length){
+          eBody.innerHTML = '<tr><td colspan="9">No entities yet.</td></tr>';
+        } else {
+          eBody.innerHTML = entities.slice(0, 200).map(x => `<tr>
+            <td>${x.id ?? ''}</td>
+            <td>${x.entityType ?? ''}</td>
+            <td>${x.slug ?? ''}</td>
+            <td>${x.country ?? ''}</td>
+            <td>${x.region ?? ''}</td>
+            <td>${x.grape ?? ''}</td>
+            <td>${x.winery ?? ''}</td>
+            <td>${x.score ?? ''}</td>
+            <td>${x.status ?? ''}</td>
+          </tr>`).join('');
+        }
+
+        const jBody = document.getElementById('jobsBody');
+        if(!jobs.length){
+          jBody.innerHTML = '<tr><td colspan="10">No jobs yet.</td></tr>';
+        } else {
+          jBody.innerHTML = jobs.map(x => {
+            const id = x.id || '';
+            const slug = x.slug || '';
+            const preview = id ? `<a class="btn" style="padding:4px 8px;font-size:11px" href="/seo/preview/${id}" target="_blank">Preview</a>` : '';
+            const generate = id ? `<button class="btn" data-action="generate" data-id="${id}" style="padding:4px 8px;font-size:11px">Generate</button>` : '';
+            const publish = id ? `<button class="btn" data-action="publish" data-id="${id}" style="padding:4px 8px;font-size:11px">Publish</button>` : '';
+            const live = x.publishedUrl ? `<a class="btn" style="padding:4px 8px;font-size:11px" href="${x.publishedUrl}" target="_blank">Live</a>` : '';
+            const task = (x.title || x.topic || x.slug || '').toString();
+            return `<tr>
+              <td>${id}</td>
+              <td>${x.entityId ?? ''}</td>
+              <td>${x.entityType ?? ''}</td>
+              <td style="max-width:280px">${task}</td>
+              <td>${x.status ?? ''}</td>
+              <td>${x.jobStatus ?? ''}</td>
+              <td>${x.outputPath ?? ''}</td>
+              <td>${x.updatedAt ?? ''}</td>
+              <td style="display:flex;gap:6px;flex-wrap:wrap">${preview}${generate}${publish}${live}</td>
+              <td>${x.error ?? ''}</td>
+            </tr>`;
+          }).join('');
+        }
+      }
+
+      async function runCreation(){
+        const entityType = document.getElementById('entityType').value;
+        const action = document.getElementById('actionType').value;
+        const limit = Number(document.getElementById('runLimit').value || 10);
+        const minScore = Number(document.getElementById('minScore').value || 0);
+        const topEntity = document.getElementById('entityTypeTop');
+        const topAction = document.getElementById('actionTypeTop');
+        const topLimit = document.getElementById('runLimitTop');
+        if(topEntity && topAction && topLimit){
+          if(!document.getElementById('entityType').value) document.getElementById('entityType').value = topEntity.value;
+          topEntity.addEventListener('change', ()=> document.getElementById('entityType').value = topEntity.value);
+          topAction.addEventListener('change', ()=> document.getElementById('actionType').value = topAction.value);
+          topLimit.addEventListener('input', ()=> document.getElementById('runLimit').value = topLimit.value);
+        }
+
+        const resultEl = document.getElementById('runResult');
+        resultEl.textContent = 'Running...';
+
+        const res = await fetch('/api/seo/pages/run', {
+          method: 'POST',
+          headers: {'content-type':'application/json'},
+          body: JSON.stringify({entityType, action, limit, minScore}),
+        });
+        const out = await res.json().catch(() => ({}));
+
+        if(!res.ok || !out.ok){
+          resultEl.innerHTML = `<span class="warn">Failed:</span> ${out.detail || out.message || 'Run failed'}`;
+          return;
+        }
+
+        const errors = Array.isArray(out.errors) ? out.errors : [];
+        const firstErr = errors.length ? ` | first error: ${(errors[0].error || '').slice(0, 160)}` : '';
+        const started = Number(out.started || 0);
+        resultEl.innerHTML = `<span class="ok">Started.</span> queued=${out.queued||0}, started=${started}, skipped=${out.skipped||0}, errors=${errors.length}${firstErr}`;
+        await loadAll();
+        if(started > 0){
+          let ticks = 0;
+          const timer = setInterval(async ()=>{
+            ticks += 1;
+            await loadAll();
+            if(ticks >= 20) clearInterval(timer);
+          }, 3000);
+        }
+      }
+
+      document.getElementById('reloadBtn').addEventListener('click', loadAll);
+      const q = document.getElementById('quickRunBtn'); if(q){ q.addEventListener('click', runCreation); }
+      document.getElementById('runBtn').addEventListener('click', runCreation);
+
+      document.addEventListener('click', async (ev)=>{
+        const el = ev.target.closest('button[data-action][data-id]');
+        if(!el) return;
+        const action = el.getAttribute('data-action');
+        const id = el.getAttribute('data-id');
+        if(!action || !id) return;
+        const resultEl = document.getElementById('runResult');
+        el.disabled = true;
+        try {
+          resultEl.textContent = `${action} ${id}...`;
+          const res = await fetch(`/api/seo/jobs/${id}/${action}`, {method:'POST'});
+          const out = await res.json().catch(()=>({ok:false}));
+          if(!res.ok || !out.ok){
+            resultEl.innerHTML = `<span class="warn">${action} failed:</span> ${out.detail || out.error || 'unknown error'}`;
+          } else {
+            resultEl.innerHTML = `<span class="ok">${action} done:</span> ${id}`;
+          }
+          await loadAll();
+        } finally {
+          el.disabled = false;
+        }
+      });
+
+      loadAll();
+    </script>
+  </body>
+</html>

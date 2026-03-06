@@ -655,10 +655,20 @@ def remove_sitemap_url(sitemap_path: str, *, url: str) -> None:
 
 
 def _git_push_best_effort(repo_dir: str) -> None:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
     try:
-        subprocess.check_call(["git", "-C", repo_dir, "push", "origin", "main"])
-    except subprocess.CalledProcessError:
-        # Do not block site publication by git transport failures.
+        subprocess.run(
+            ["git", "-C", repo_dir, "push", "origin", "main"],
+            check=False,
+            timeout=25,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        # Do not block site publication by git transport failures/timeouts.
         return
 
 

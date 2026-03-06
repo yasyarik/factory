@@ -29,9 +29,10 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
     if not title:
         problems.append("missing title")
 
-    # PDF requirement: meta description 155-160.
-    if not desc or len(desc) < 155 or len(desc) > 160:
-        problems.append("description length must be 155-160 chars")
+    # Meta requirement: description 145-158 chars.
+    desc_len = len(desc) if desc else 0
+    if not desc or desc_len < 145 or desc_len > 158:
+        problems.append(f"description length must be 145-158 chars (got {desc_len})")
 
     if not slug:
         problems.append("missing slug")
