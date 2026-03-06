@@ -12,6 +12,7 @@ from typing import Any
 from urllib.parse import urlparse
 import urllib.request
 import urllib.error
+import urllib.parse
 import html as html_lib
 
 try:
@@ -171,6 +172,10 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 app = FastAPI()
 
+def _seo_enabled() -> bool:
+    raw = (os.environ.get("SEO_MODULE_ENABLED") or "1").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
 _AUTOPUBLISH_LOCK = threading.Lock()
 _TOPIC_DISCOVERY_LOCK = threading.Lock()
 _AUTOPUBLISH_THREAD = None
@@ -211,6 +216,8 @@ SOCIAL_ENV_KEYS = {
     "TWITTER_ACCESS_TOKEN",
     "TWITTER_ACCESS_TOKEN_SECRET",
     "GEMINI_API_KEY",
+    "GEMINI_API_KEY_BACKUP",
+    "GEMINI_ACTIVE_KEY",
     "GEMINI_TEXT_MODEL",
     "GEMINI_IMAGE_MODEL",
 }
@@ -224,6 +231,7 @@ SOCIAL_SECRET_KEYS = {
     "TWITTER_ACCESS_TOKEN",
     "TWITTER_ACCESS_TOKEN_SECRET",
     "GEMINI_API_KEY",
+    "GEMINI_API_KEY_BACKUP",
 }
 
 
@@ -356,6 +364,75 @@ def _locale_sitemap_path(locale: str) -> str:
     return os.path.join(LANDING_DIR, f"sitemap-{locale}.xml")
 
 
+def _seo_sections_mode() -> bool:
+    val = str(os.environ.get("SEO_SECTIONS_MODE", "0")).strip().lower()
+    return val in ("1", "true", "yes", "on")
+
+
+def _seo_section_for_entity(entity_type: str):
+    if not _seo_sections_mode():
+        return None
+    et = (entity_type or "").strip().lower()
+    if et == "country":
+        return "wine-countries"
+    if et == "region":
+        return "wine-regions"
+    return None
+
+
+def _seo_section_for_job(job_id: str):
+    try:
+        with db_connect(DB_PATH) as conn:
+            row = conn.execute(
+                "SELECT entity_type FROM seo_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+        if not row:
+            return None
+        return _seo_section_for_entity(row[0] or "")
+    except Exception:
+        return None
+
+
+def _section_url(section: str, slug: str, locale: str = "en") -> str:
+    origin = _site_origin().rstrip("/")
+    if locale and locale != "en":
+        return f"{origin}/{locale}/{section}/{slug}/"
+    return f"{origin}/{section}/{slug}/"
+
+
+def _apply_hreflang_block_for_path(html: str, section_path: str, locale: str) -> str:
+    origin = _site_origin().rstrip("/")
+    base = "/" + (section_path or "").strip("/") + "/"
+
+    if locale != "en":
+        canonical = f"{origin}/{locale}{base}"
+    else:
+        canonical = f"{origin}{base}"
+
+    alts = {"en": f"{origin}{base}"}
+    for loc in LOCALES:
+        alts[loc] = f"{origin}/{loc}{base}"
+
+    block = (
+        f'<link href="{canonical}" rel="canonical"/>'
+        + "".join([f'<link href="{u}" hreflang="{k}" rel="alternate"/>' for k, u in alts.items()])
+        + f'<link href="{alts["en"]}" hreflang="x-default" rel="alternate"/>'
+    )
+    html = re.sub(r"(?is)<link\s+[^>]*rel=[\"\']canonical[\"\'][^>]*>", "", html)
+    html = re.sub(r"(?is)<link\s+[^>]*hreflang=[\"\'][^\"\']+[\"\'][^>]*rel=[\"\']alternate[\"\'][^>]*>", "", html)
+    html = re.sub(r"(?is)<link\s+[^>]*rel=[\"\']alternate[\"\'][^>]*hreflang=[\"\'][^\"\']+[\"\'][^>]*>", "", html)
+    html = re.sub(
+        r"(?is)<meta\s+[^>]*property=[\"\']og:url[\"\'][^>]*>",
+        f'<meta content="{canonical}" property="og:url"/>',
+        html,
+        count=1,
+    )
+    if "</head>" in html:
+        html = html.replace("</head>", block + "</head>", 1)
+    return html
+
+
 def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
     try:
         with open(index_path, 'r', encoding='utf-8') as f:
@@ -373,7 +450,37 @@ def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
         flags=re.IGNORECASE,
     )
 
+    blog_dir = os.path.dirname(index_path)
     posts = []
+    seen_href: set[str] = set()
+    seen_title_key: set[str] = set()
+
+    def _title_key(s: str) -> str:
+        t = (s or "").lower().strip()
+        t = t.replace("&", " and ")
+        t = re.sub(r"\b20\d{2}\b", " ", t)
+        t = re.sub(r"[^a-z0-9]+", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def _feed_safe_image(url_path: str) -> str:
+        img = (url_path or "").strip()
+        if not img or not img.startswith("/blog/"):
+            return img
+        file_name = os.path.basename(img)
+        local_abs = os.path.join(blog_dir, file_name)
+
+        # Homepage JS prefers *-card.webp. If it does not exist, add query param
+        # so JS keeps original file and does not rewrite to a missing thumbnail.
+        if re.search(r"-hero\.webp$", file_name, flags=re.IGNORECASE):
+            card_name = re.sub(r"-hero\.webp$", "-hero-card.webp", file_name, flags=re.IGNORECASE)
+            if not os.path.exists(os.path.join(blog_dir, card_name)) and os.path.exists(local_abs):
+                return img + "?full=1"
+        if re.search(r"-img-1\.webp$", file_name, flags=re.IGNORECASE):
+            card_name = re.sub(r"-img-1\.webp$", "-img-1-card.webp", file_name, flags=re.IGNORECASE)
+            if not os.path.exists(os.path.join(blog_dir, card_name)) and os.path.exists(local_abs):
+                return img + "?full=1"
+        return img
     for m in pattern.finditer(src):
         href = (m.group(1) or '').strip()
         image = (m.group(2) or '').strip()
@@ -386,6 +493,17 @@ def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
         if image and not image.startswith('/'):
             image = '/blog/' + image.lstrip('./')
 
+        title_key = _title_key(title)
+        href_key = href.lower()
+        if href_key in seen_href:
+            continue
+        if title_key and title_key in seen_title_key:
+            continue
+        seen_href.add(href_key)
+        if title_key:
+            seen_title_key.add(title_key)
+
+        image = _feed_safe_image(image)
         posts.append({
             'href': href,
             'image': image or '/hero_ai.jpg',
@@ -429,6 +547,315 @@ def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
     if "</head>" in html:
         html = html.replace("</head>", block + "</head>", 1)
     return html
+
+
+def _ensure_min_inline_placeholders(content_html: str, slug: str, min_images: int = 3) -> str:
+    src = content_html or ""
+    existing = len(re.findall(r"<img\b", src, flags=re.IGNORECASE))
+    need = max(0, int(min_images) - existing)
+    if need <= 0:
+        return src
+
+    placeholders = []
+    base = _slugify(slug or "seo")
+    for i in range(1, need + 1):
+        ph_src = f"{base}-inline-{i}.png"
+        placeholders.append(
+            (
+                f'<figure class="seo-inline-image">'
+                f'<img src="{ph_src}" alt="Wine illustration {i}" loading="lazy"/>'
+                f"</figure>"
+            )
+        )
+
+    idx = 0
+    def _inject_after_h2(m: re.Match[str]) -> str:
+        nonlocal idx
+        out = m.group(0)
+        if idx < len(placeholders):
+            out += "\n" + placeholders[idx] + "\n"
+            idx += 1
+        return out
+
+    out = re.sub(r"</h2>", _inject_after_h2, src, flags=re.IGNORECASE)
+    while idx < len(placeholders):
+        out += "\n" + placeholders[idx] + "\n"
+        idx += 1
+    return out
+
+
+def _rewrite_section_blog_artifacts(html: str, section: str, slug: str, locale: str) -> str:
+    out = html or ""
+    # Some legacy SEO jobs may store full published HTML instead of article body.
+    # Extract only article content to avoid nested old templates/CSS leaking in.
+    if re.search(r"(?is)<html\b|<!doctype", out):
+        m_article = re.search(r'(?is)<article[^>]*class="[^"]*\bcontent\b[^"]*"[^>]*>(.*?)</article>', out)
+        if m_article:
+            out = m_article.group(1)
+        else:
+            m_post = re.search(r'(?is)<div[^>]*class="[^"]*\bpost-content\b[^"]*"[^>]*>(.*?)</div>', out)
+            if m_post:
+                out = m_post.group(1)
+            else:
+                m_body = re.search(r"(?is)<body[^>]*>(.*?)</body>", out)
+                if m_body:
+                    out = m_body.group(1)
+        # Remove wrappers that are irrelevant for section body.
+        out = re.sub(r"(?is)<(style|script|header|footer|nav)\b[^>]*>.*?</\1>", "", out)
+        out = re.sub(r"(?is)<(html|head|body)\b[^>]*>", "", out)
+        out = re.sub(r"(?is)</(html|head|body)>", "", out)
+
+    origin = _site_origin().rstrip("/")
+    locale_prefix = f"/{locale}" if locale and locale != "en" else ""
+    blog_url = f"{origin}{locale_prefix}/blog/{slug}.html"
+    section_url = f"{origin}{locale_prefix}/{section}/{slug}/"
+    section_index = f"{origin}{locale_prefix}/{section}/"
+    section_name = "Wine Countries" if section == "wine-countries" else ("Wine Regions" if section == "wine-regions" else "Wine")
+
+    # Fix schema/breadcrumb canonical references generated by blog template.
+    out = out.replace(blog_url, section_url)
+    out = out.replace(f'href="{locale_prefix}/blog/"', f'href="{locale_prefix}/{section}/"')
+    out = out.replace(f'href="{origin}{locale_prefix}/blog/"', f'href="{section_index}"')
+    out = out.replace(">Blog<", f">{section_name}<")
+
+    # Section pages are not under /blog/, so relative inline image src must point to /blog assets.
+    def _img_src_to_blog(m: re.Match[str]) -> str:
+        src = (m.group(1) or "").strip()
+        if not src:
+            return m.group(0)
+        low = src.lower()
+        if low.startswith("http://") or low.startswith("https://") or low.startswith("data:"):
+            return m.group(0)
+        if src.startswith("/"):
+            return m.group(0)
+        return m.group(0).replace(src, f"/blog/{src}")
+
+    out = re.sub(r'<img[^>]*\bsrc="([^"]+)"', _img_src_to_blog, out, flags=re.IGNORECASE)
+    return out
+
+
+def _render_seo_section_html(
+    *,
+    title: str,
+    description: str,
+    section: str,
+    slug: str,
+    hero_image: str,
+    content_html: str,
+    updated_at: str,
+    locale: str = "en",
+    noindex: bool = False,
+) -> str:
+    def _slugify_local(s: str) -> str:
+        x = (s or "").strip().lower()
+        x = re.sub(r"[^a-z0-9\s-]", "", x)
+        x = re.sub(r"\s+", "-", x)
+        x = re.sub(r"-+", "-", x)
+        return x[:120].strip("-") or "section"
+
+    origin = _site_origin().rstrip("/")
+    section_label = "Wine Countries" if section == "wine-countries" else ("Wine Regions" if section == "wine-regions" else "Wine")
+    locale_prefix = f"/{locale}" if locale and locale != "en" else ""
+    section_index = f"{locale_prefix}/{section}/"
+    page_url = f"{origin}{locale_prefix}/{section}/{slug}/"
+    hero_file = os.path.basename(hero_image or "logo.png")
+    hero_url = f"/blog/{hero_file}" if hero_file else "/logo.png"
+    body_html = _rewrite_section_blog_artifacts(content_html or "", section, slug, locale)
+    # Build compact TOC from H2/H3 in section content.
+    toc_items = []
+    for m in re.finditer(r"<(h2|h3)([^>]*)>(.*?)</\1>", body_html, flags=re.IGNORECASE | re.DOTALL):
+        tag = (m.group(1) or "").lower()
+        attrs = m.group(2) or ""
+        inner = m.group(3) or ""
+        text = re.sub(r"<[^>]+>", "", inner).strip()
+        if not text:
+            continue
+        id_match = re.search(r'\bid\s*=\s*"([^"]+)"', attrs, flags=re.IGNORECASE)
+        hid = (id_match.group(1).strip() if id_match else "") or _slugify_local(text)
+        if not id_match:
+            full = m.group(0)
+            with_id = f"<{tag}{attrs} id=\"{hid}\">{inner}</{tag}>"
+            body_html = body_html.replace(full, with_id, 1)
+        toc_items.append((tag, hid, html_lib.escape(text)))
+    toc_items = toc_items[:18]
+    toc_title_map = {
+        "en": "On this page",
+        "ru": "На этой странице",
+        "es": "En esta página",
+        "de": "Auf dieser Seite",
+        "fr": "Sur cette page",
+    }
+    toc_title = toc_title_map.get(locale, "On this page")
+    toc_html = ""
+    if toc_items:
+        toc_html = (
+            '<aside class="toc"><div class="toc-title">' + toc_title + '</div><ul>'
+            + "".join([
+                f'<li><a class="{("toc-h3" if lvl=="h3" else "toc-h2")}" href="#{hid}">{txt}</a></li>'
+                for lvl, hid, txt in toc_items
+            ])
+            + "</ul></aside>"
+        )
+    robots = "noindex,nofollow" if noindex else "index,follow"
+    t = html_lib.escape(title or "")
+    d = html_lib.escape(description or "")
+    updated = html_lib.escape((updated_at or "")[:10] or utcnow_iso()[:10])
+    share_title = urllib.parse.quote(title or "")
+    share_url = urllib.parse.quote(page_url)
+    share_block = (
+        '<section class="share-section"><h3>Share</h3><div class="share-links">'
+        + f'<a href="https://www.linkedin.com/sharing/share-offsite/?url={share_url}" target="_blank" rel="noreferrer">LinkedIn</a>'
+        + f'<a href="https://twitter.com/intent/tweet?url={share_url}&text={share_title}" target="_blank" rel="noreferrer">X</a>'
+        + f'<a href="https://www.facebook.com/sharer/sharer.php?u={share_url}" target="_blank" rel="noreferrer">Facebook</a>'
+        + f'<a href="https://api.whatsapp.com/send?text={share_title}%20{share_url}" target="_blank" rel="noreferrer">WhatsApp</a>'
+        + f'<a href="https://t.me/share/url?url={share_url}&text={share_title}" target="_blank" rel="noreferrer">Telegram</a>'
+        + '</div></section>'
+    )
+    return f"""<!DOCTYPE html>
+<html lang="{locale}">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>{t}</title>
+  <meta name="description" content="{d}"/>
+  <meta name="robots" content="{robots}"/>
+  <meta property="og:type" content="article"/>
+  <meta property="og:title" content="{t}"/>
+  <meta property="og:description" content="{d}"/>
+  <meta property="og:image" content="{origin}{hero_url}"/>
+  <style>
+    :root {{
+      --bg-dark:#12070c;
+      --bg-gradient:linear-gradient(135deg,#12070c 0%,#2a0d16 50%,#4f1424 100%);
+      --accent:#b63a5a;
+      --accent-hover:#962f49;
+      --glass-bg:rgba(255,255,255,.035);
+      --glass-border:rgba(255,255,255,.12);
+      --text:#f4edf0;
+      --dim:#efe6ea;
+      --line:rgba(255,255,255,.12);
+      --card:rgba(255,255,255,.03);
+      --container:1280px;
+    }}
+    * {{ box-sizing:border-box; }}
+    html {{ scroll-behavior:smooth; }}
+    body {{ margin:0; font-family:ui-sans-serif,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; color:var(--text); background:var(--bg-dark); overflow-x:hidden; }}
+    .fixed-bg {{ position:fixed; inset:0; z-index:-1; background:var(--bg-gradient); }}
+    .fixed-bg:before {{ content:""; position:absolute; inset:0; background:
+      radial-gradient(circle at 18% 26%, rgba(144,22,56,.45) 0%, transparent 36%),
+      radial-gradient(circle at 82% 16%, rgba(188,88,116,.28) 0%, transparent 40%),
+      radial-gradient(circle at 50% 76%, rgba(92,16,37,.42) 0%, transparent 42%);
+      background-size:200% 200%;
+      animation:shift 34s ease infinite;
+    }}
+    @keyframes shift {{ 0%,100%{{background-position:0% 50%}} 50%{{background-position:100% 50%}} }}
+    .container {{ max-width:var(--container); margin:0 auto; padding:0 24px; }}
+    nav {{ padding:24px 0; display:flex; justify-content:space-between; align-items:center; position:fixed; top:0; left:0; right:0; z-index:20; transition:.25s; }}
+    nav.nav-scrolled {{ background:rgba(18,7,12,.85); backdrop-filter:blur(12px); padding:15px 0; border-bottom:1px solid rgba(255,255,255,.06); }}
+    .nav-container {{ max-width:var(--container); margin:0 auto; padding:0 24px; display:flex; justify-content:space-between; align-items:center; width:100%; }}
+    .logo {{ display:flex; align-items:center; text-decoration:none; }}
+    .logo-img {{ height:64px; width:auto; object-fit:contain; }}
+    .nav-links {{ display:flex; gap:22px; align-items:center; }}
+    .nav-links a {{ color:var(--dim); text-decoration:none; font-size:14px; font-weight:600; }}
+    .nav-links a:hover {{ color:#fff; }}
+    .countries-menu {{ position:relative; display:inline-flex; align-items:center; }}
+    .countries-btn {{ color:var(--dim); text-decoration:none; font-size:14px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px; }}
+    .countries-btn:after {{ content:"▾"; font-size:11px; opacity:.9; }}
+    .countries-list {{ position:absolute; top:calc(100% + 10px); left:0; min-width:220px; display:none; flex-direction:column; padding:8px; border:1px solid var(--line); border-radius:12px; background:rgba(18,7,12,.95); box-shadow:0 14px 30px rgba(0,0,0,.35); z-index:50; }}
+    .countries-menu:hover .countries-list, .countries-menu:focus-within .countries-list {{ display:flex; }}
+    .countries-list a {{ margin:0; padding:8px 10px; border-radius:8px; white-space:nowrap; }}
+    .countries-list a:hover {{ background:rgba(182,58,90,.2); }}
+    main.container {{ padding-top:120px; padding-bottom:40px; }}
+    .hero {{ border:1px solid var(--line); border-radius:20px; background:var(--card); overflow:hidden; box-shadow:0 20px 50px rgba(0,0,0,.35); }}
+    .hero-cover {{ width:100%; height:480px; background-size:cover; background-position:center; }}
+    .hero-body {{ padding:20px; }}
+    .kicker {{ color:var(--dim); font-size:13px; margin-bottom:8px; }}
+    h1 {{ margin:0; font-size:36px; line-height:1.12; letter-spacing:-.02em; }}
+    .desc {{ margin:12px 0 0; color:var(--dim); font-size:17px; }}
+    .meta {{ margin-top:12px; color:var(--dim); font-size:13px; }}
+    .crumbs {{ margin-top:8px; color:var(--dim); font-size:13px; }}
+    .crumbs a {{ color:var(--dim); text-decoration:none; border-bottom:1px dashed rgba(255,255,255,.25); }}
+    .layout {{ margin-top:18px; display:grid; grid-template-columns: 290px minmax(0,1fr); gap:16px; align-items:start; }}
+    .toc {{ border:1px solid var(--line); border-radius:16px; background:var(--card); padding:14px; position:sticky; top:92px; max-height:calc(100vh - 108px); overflow:auto; }}
+    .toc-title {{ font-size:14px; color:var(--dim); margin-bottom:8px; font-weight:700; }}
+    .toc ul {{ list-style:none; margin:0; padding:0; display:grid; gap:6px; }}
+    .toc a {{ color:#eddde9; text-decoration:none; font-size:13px; line-height:1.3; display:block; border:1px solid transparent; border-radius:10px; padding:6px 8px; }}
+    .toc a:hover {{ border-color:var(--line); background:rgba(255,255,255,.03); }}
+    .toc-h3 {{ margin-left:10px; opacity:.92; font-size:12px !important; }}
+    .content {{ border:1px solid var(--line); border-radius:20px; background:var(--card); padding:24px; }}
+    .content h2 {{ margin-top:28px; margin-bottom:10px; font-size:28px; }}
+    .content h3 {{ margin-top:20px; margin-bottom:8px; font-size:21px; color:#f4d8e0; }}
+    .content h2[id], .content h3[id] {{ scroll-margin-top:110px; }}
+    .content p, .content li {{ color:#efe3f1; line-height:1.72; font-size:17px; }}
+    .content a {{ color:#ffc7d4; }}
+    .content img {{ max-width:100%; border-radius:14px; border:1px solid var(--line); box-shadow:0 10px 24px rgba(0,0,0,.3); }}
+    .content figure {{ margin:22px 0; }}
+    .content table {{ width:100%; border-collapse:collapse; margin:14px 0; }}
+    .content th,.content td {{ border:1px solid var(--line); padding:10px; text-align:left; }}
+    .content blockquote {{ border-left:4px solid var(--accent); margin:20px 0; padding:10px 14px; background:rgba(182,58,90,.12); }}
+    .share-section {{ margin-top:14px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.03); padding:12px; }}
+    .share-section h3 {{ margin:0 0 8px; font-size:15px; color:var(--dim); }}
+    .share-links {{ display:flex; flex-wrap:wrap; gap:8px; }}
+    .share-links a {{ text-decoration:none; color:#fbe9ef; border:1px solid var(--line); padding:7px 10px; border-radius:10px; background:rgba(255,255,255,.02); font-size:13px; }}
+    .share-links a:hover {{ background:rgba(182,58,90,.22); }}
+    footer {{ border-top:1px solid var(--glass-border); padding:40px 0; text-align:center; color:var(--dim); font-size:14px; margin-top:28px; }}
+    footer a {{ color:var(--dim); text-decoration:none; margin:0 10px; }}
+    @media (max-width: 980px) {{ .layout {{ grid-template-columns:1fr; }} .toc {{ position:static; top:auto; max-height:none; }} }}
+    @media (max-width:740px) {{ .logo-img {{ height:52px; }} .nav-links {{ gap:14px; }} main.container {{ padding-top:96px; }} }}
+  </style>
+</head>
+<body>
+  <div class="fixed-bg"></div>
+  <nav>
+    <div class="nav-container">
+      <a class="logo" href="/"><img class="logo-img" src="/logo-yas-wine-64.webp" alt="YAS Wine Logo" width="64" height="64" decoding="async" fetchpriority="low" /></a>
+      <div class="nav-links">
+        <a href="/">Home</a>
+        <a href="/blog/">Blog</a>
+        <div class="countries-menu">
+          <a class="countries-btn" href="/wine-countries/">Countries</a>
+          <div class="countries-list">
+            <a href="/wine-countries/">All Countries</a>
+            <a href="/wine-countries/wine-country-brazil/">Brazil</a>
+            <a href="/wine-countries/wine-country-chile/">Chile</a>
+            <a href="/wine-countries/wine-country-portugal/">Portugal</a>
+            <a href="/wine-countries/wine-country-uruguay/">Uruguay</a>
+          </div>
+        </div>
+        <div id="lang-switcher-host"></div>
+      </div>
+    </div>
+  </nav>
+  <main class="container">
+    <section class="hero">
+      <div class="hero-cover" style="background-image:url('{hero_url}')"></div>
+      <div class="hero-body">
+        <div class="kicker">{section_label}</div>
+        <h1>{t}</h1>
+        <p class="desc">{d}</p>
+        <div class="meta">Updated: {updated}</div>
+        <div class="crumbs"><a href="/">Home</a> · <a href="{section_index}">{section_label}</a></div>
+      </div>
+    </section>
+    <section class="layout">
+      {toc_html}
+      <article class="content">
+        {body_html}
+      </article>
+    </section>
+    {share_block}
+  </main>
+  <footer>
+    <p>© {datetime.now(timezone.utc).year} YAS Wine. All rights reserved.</p>
+    <div style="margin-top:15px">
+      <a href="/policy/terms/">Terms of Service</a> |
+      <a href="/policy/privacy/">Privacy Policy</a>
+    </div>
+  </footer>
+  <script defer src="/i18n-switcher.js?v=20260218-1"></script>
+  <script defer src="/shared/layout.js?v=20260306-3"></script>
+</body>
+</html>"""
 
 
 def _translate_post_payload(
@@ -507,11 +934,8 @@ def _translate_post_payload(
             tr_html = out.get("contentHtml") or content_html
             tr_faq = out.get("faq") if isinstance(out.get("faq"), list) else faq
 
-            if locale != "en":
-                same_title = _norm_text(tr_title) == _norm_text(title)
-                same_desc = _norm_text(tr_desc) == _norm_text(description)
-                if same_title and same_desc:
-                    raise ValueError("translation looks unchanged from EN source")
+            # Keep publish resilient: some locales may legitimately keep title/description close
+            # to EN when they contain many proper nouns/brands.
 
             return {
                 "title": tr_title,
@@ -598,6 +1022,21 @@ def _mark_stale_generating_jobs(max_age_min: int = 45) -> None:
             UPDATE jobs
             SET status='ERROR', error=?, updated_at=?
             WHERE status='GENERATING' AND updated_at < ?
+            """,
+            (stale_msg, now, cutoff),
+        )
+
+
+def _mark_stale_seo_jobs(max_age_min: int = 45) -> None:
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=max_age_min)).replace(microsecond=0).isoformat()
+    now = utcnow_iso()
+    stale_msg = f"Stale SEO job timeout after {max_age_min} minutes"
+    with db_connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE seo_jobs
+            SET status='ERROR', error=COALESCE(error, ?), updated_at=?
+            WHERE status IN ('GENERATING','PUBLISHING') AND updated_at < ?
             """,
             (stale_msg, now, cutoff),
         )
@@ -1156,6 +1595,84 @@ def _apply_enabled_languages_to_landing() -> dict[str, Any]:
 
 
 
+def _gemini_key_settings() -> dict[str, str]:
+    values = _env_file_values(ENV_PATH)
+
+    def pick(key: str, *fallbacks: str) -> str:
+        for k in (key, *fallbacks):
+            v = (values.get(k) or os.environ.get(k) or "").strip()
+            if v:
+                return v
+        return ""
+
+    primary = pick("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    backup = pick("GEMINI_API_KEY_BACKUP", "GOOGLE_API_KEY_BACKUP")
+    active = (pick("GEMINI_ACTIVE_KEY") or "primary").lower()
+    if active not in ("primary", "backup"):
+        active = "primary"
+    if active == "backup" and not backup:
+        active = "primary"
+    return {"primary": primary, "backup": backup, "active": active}
+
+
+def _activate_gemini_key(target: str) -> str:
+    st = _gemini_key_settings()
+    choice = (target or st.get("active") or "primary").strip().lower()
+    if choice == "backup" and st.get("backup"):
+        key = st["backup"]
+    else:
+        key = st.get("primary") or ""
+    if key:
+        os.environ["GEMINI_API_KEY"] = key
+        os.environ["GOOGLE_API_KEY"] = key
+    return key
+
+
+def _active_gemini_api_key() -> str:
+    st = _gemini_key_settings()
+    return _activate_gemini_key(st.get("active") or "primary")
+
+
+def _is_gemini_runtime_error(err: Any) -> bool:
+    msg = str(err or "").lower()
+    if not msg:
+        return False
+    signals = (
+        "http error",
+        "too many requests",
+        "resource_exhausted",
+        "quota",
+        "rate limit",
+        "api key",
+        "forbidden",
+        "unauthorized",
+        "deadline exceeded",
+        "timed out",
+        "temporarily unavailable",
+        "generativelanguage.googleapis.com",
+        "gemini",
+    )
+    return any(s in msg for s in signals)
+
+
+def _switch_gemini_to_backup(reason: str = "", job_id: str | None = None) -> bool:
+    st = _gemini_key_settings()
+    if st.get("active") != "primary" or not st.get("backup"):
+        return False
+
+    updates = {
+        "GEMINI_ACTIVE_KEY": "backup",
+    }
+    _env_write_updates(ENV_PATH, updates, set())
+    for k, v in updates.items():
+        os.environ[k] = v
+    _activate_gemini_key("backup")
+    if job_id:
+        log_event(DB_PATH, job_id, "WARN", f"Gemini key auto-switched to backup: {reason or 'runtime error'}")
+    return True
+
+
+
 def _social_settings_snapshot() -> dict[str, Any]:
     values = _env_file_values(ENV_PATH)
 
@@ -1184,6 +1701,13 @@ def _social_settings_snapshot() -> dict[str, Any]:
     out["TWITTER_ACCESS_TOKEN"] = pick("TWITTER_ACCESS_TOKEN", "X_ACCESS_TOKEN")
     out["TWITTER_ACCESS_TOKEN_SECRET"] = pick("TWITTER_ACCESS_TOKEN_SECRET", "X_ACCESS_TOKEN_SECRET")
     out["GEMINI_API_KEY"] = pick("GEMINI_API_KEY", "GOOGLE_API_KEY")
+    out["GEMINI_API_KEY_BACKUP"] = pick("GEMINI_API_KEY_BACKUP", "GOOGLE_API_KEY_BACKUP")
+    active = (pick("GEMINI_ACTIVE_KEY") or "primary").lower()
+    if active not in ("primary", "backup"):
+        active = "primary"
+    if active == "backup" and not out["GEMINI_API_KEY_BACKUP"]:
+        active = "primary"
+    out["GEMINI_ACTIVE_KEY"] = active
     out["GEMINI_TEXT_MODEL"] = pick("GEMINI_TEXT_MODEL", "GEMINI_MODEL_TEXT", "GEMINI_MODEL") or "gemini-2.5-flash"
     out["GEMINI_IMAGE_MODEL"] = pick("GEMINI_IMAGE_MODEL", "GEMINI_MODEL_IMAGE") or "gemini-2.5-flash-image"
 
@@ -1383,6 +1907,7 @@ def _startup() -> None:
     # Mark stale async states only on startup (not during UI polling)
     _mark_stale_social_postings(max_age_min=30)
     _mark_stale_generating_jobs(max_age_min=45)
+    _mark_stale_seo_jobs(max_age_min=45)
     _autopublish_start_scheduler()
 
 
@@ -1397,12 +1922,486 @@ def index(request: Request):
     )
 
 
+@app.get("/seo", response_class=HTMLResponse)
+def seo_dashboard(request: Request):
+    if not _seo_enabled():
+        raise HTTPException(status_code=404, detail="SEO module disabled")
+    return templates.TemplateResponse(
+        "seo.html",
+        {
+            "request": request,
+            "build": utcnow_iso(),
+        },
+    )
+
+
+@app.get("/api/seo/health")
+def seo_health():
+    if not _seo_enabled():
+        return {"ok": False, "enabled": False}
+
+    with db_connect(DB_PATH) as conn:
+        entities = conn.execute("SELECT COUNT(1) FROM seo_entities").fetchone()[0]
+        jobs = conn.execute("SELECT COUNT(1) FROM seo_jobs").fetchone()[0]
+        by_status_rows = conn.execute(
+            "SELECT status, COUNT(1) FROM seo_jobs GROUP BY status ORDER BY COUNT(1) DESC"
+        ).fetchall()
+
+    by_status = {r[0]: r[1] for r in by_status_rows}
+    return {
+        "ok": True,
+        "enabled": True,
+        "entities": entities,
+        "jobs": jobs,
+        "jobsByStatus": by_status,
+    }
+
+
+@app.get("/api/seo/entities")
+def seo_entities_list(entity_type: str = "", limit: int = 200):
+    if not _seo_enabled():
+        raise HTTPException(status_code=404, detail="SEO module disabled")
+
+    lim = max(1, min(int(limit or 200), 1000))
+    q = """
+        SELECT id, entity_type, entity_key, slug, title, country, region, grape, winery, year,
+               abv, body, acidity, score, indexable, status, created_at, updated_at
+        FROM seo_entities
+    """
+    params = []
+    if entity_type:
+        q += " WHERE entity_type = ?"
+        params.append(entity_type.strip())
+    q += " ORDER BY score DESC, updated_at DESC LIMIT ?"
+    params.append(lim)
+
+    with db_connect(DB_PATH) as conn:
+        rows = conn.execute(q, tuple(params)).fetchall()
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": r[0],
+            "entityType": r[1],
+            "entityKey": r[2],
+            "slug": r[3],
+            "title": r[4],
+            "country": r[5],
+            "region": r[6],
+            "grape": r[7],
+            "winery": r[8],
+            "year": r[9],
+            "abv": r[10],
+            "body": r[11],
+            "acidity": r[12],
+            "score": r[13],
+            "indexable": bool(r[14]),
+            "status": r[15],
+            "createdAt": r[16],
+            "updatedAt": r[17],
+        })
+
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+@app.get("/api/seo/jobs")
+def seo_jobs_list(status: str = "", limit: int = 200):
+    if not _seo_enabled():
+        raise HTTPException(status_code=404, detail="SEO module disabled")
+
+    try:
+        _mark_stale_generating_jobs(max_age_min=60)
+        _mark_stale_seo_jobs(max_age_min=60)
+    except Exception:
+        pass
+
+    lim = max(1, min(int(limit or 200), 1000))
+    q = """
+        SELECT sj.id, sj.entity_id, sj.entity_type, sj.status, sj.error, sj.output_path, sj.created_at, sj.updated_at,
+               j.status, j.slug, j.published_url, j.topic, j.title
+        FROM seo_jobs sj
+        LEFT JOIN jobs j ON j.id = sj.id
+    """
+    params = []
+    if status:
+        q += " WHERE sj.status = ?"
+        params.append(status.strip())
+    q += " ORDER BY sj.created_at DESC LIMIT ?"
+    params.append(lim)
+
+    with db_connect(DB_PATH) as conn:
+        rows = conn.execute(q, tuple(params)).fetchall()
+
+    items = []
+    for r in rows:
+        items.append({
+            "id": r[0],
+            "entityId": r[1],
+            "entityType": r[2],
+            "status": r[3],
+            "error": r[4],
+            "outputPath": r[5],
+            "createdAt": r[6],
+            "updatedAt": r[7],
+            "jobStatus": r[8],
+            "slug": r[9],
+            "publishedUrl": r[10],
+            "topic": r[11],
+            "title": r[12],
+        })
+
+    return {"ok": True, "items": items, "count": len(items)}
+
+
+def _seo_topic_for_entity(entity_type: str, title: str, country: str, region: str) -> tuple[str, str]:
+    et = (entity_type or "").strip().lower()
+    t = (title or "").strip()
+    c = (country or "").strip()
+    r = (region or "").strip()
+    if et == "country":
+        label = c or t
+        topic = f"Wine Guide to {label}: best regions, grapes, producers, and food pairings"
+        category = "Buying Guides"
+    elif et == "region":
+        label = r or t
+        topic = f"Wine Guide to {label}: key grapes, wineries, style profile, and food pairings"
+        category = "Wine Regions"
+    else:
+        label = t or c or r or "wine"
+        topic = f"Wine Guide: {label}"
+        category = "Buying Guides"
+    return topic, category
+
+
+def _seo_run_job_pipeline(job_ids: list[str], action: str) -> None:
+    for job_id in job_ids:
+        if action in ("generate", "publish"):
+            try:
+                with db_connect(DB_PATH) as conn:
+                    conn.execute(
+                        "UPDATE seo_jobs SET status='GENERATING', error=NULL, updated_at=? WHERE id=?",
+                        (utcnow_iso(), job_id),
+                    )
+
+                res = generate(job_id)
+                generated_ok = True
+                if isinstance(res, JSONResponse):
+                    generated_ok = False
+                    try:
+                        payload = json.loads(res.body.decode("utf-8"))
+                        generated_ok = bool(payload.get("success"))
+                    except Exception:
+                        generated_ok = False
+                elif isinstance(res, dict):
+                    generated_ok = bool(res.get("success", True))
+
+                if not generated_ok:
+                    with db_connect(DB_PATH) as conn:
+                        conn.execute(
+                            "UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?",
+                            ("generate returned unsuccessful result", utcnow_iso(), job_id),
+                        )
+                    continue
+
+                with db_connect(DB_PATH) as conn:
+                    conn.execute(
+                        "UPDATE seo_jobs SET status='GENERATED', error=NULL, updated_at=? WHERE id=?",
+                        (utcnow_iso(), job_id),
+                    )
+            except Exception as gen_err:
+                with db_connect(DB_PATH) as conn:
+                    conn.execute(
+                        "UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?",
+                        (str(gen_err), utcnow_iso(), job_id),
+                    )
+                continue
+
+        if action == "publish":
+            try:
+                with db_connect(DB_PATH) as conn:
+                    conn.execute(
+                        "UPDATE seo_jobs SET status='PUBLISHING', error=NULL, updated_at=? WHERE id=?",
+                        (utcnow_iso(), job_id),
+                    )
+
+                pub = publish(job_id)
+                pub_ok = True
+                if isinstance(pub, dict):
+                    pub_ok = bool(pub.get("success", False))
+
+                if pub_ok:
+                    output_path = None
+                    with db_connect(DB_PATH) as conn:
+                        row = conn.execute("SELECT published_url, slug FROM jobs WHERE id=?", (job_id,)).fetchone()
+                        if row:
+                            output_path = row[0] or (f"/blog/{row[1]}/" if row[1] else None)
+                        conn.execute(
+                            "UPDATE seo_jobs SET status='PUBLISHED', error=NULL, output_path=?, updated_at=? WHERE id=?",
+                            (output_path, utcnow_iso(), job_id),
+                        )
+                else:
+                    msg = str(pub.get("error") or "publish failed") if isinstance(pub, dict) else "publish failed"
+                    with db_connect(DB_PATH) as conn:
+                        conn.execute(
+                            "UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?",
+                            (msg, utcnow_iso(), job_id),
+                        )
+            except Exception as pub_err:
+                with db_connect(DB_PATH) as conn:
+                    conn.execute(
+                        "UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?",
+                        (str(pub_err), utcnow_iso(), job_id),
+                    )
+
+
+@app.post("/api/seo/pages/run")
+async def seo_pages_run(request: Request):
+    if not _seo_enabled():
+        raise HTTPException(status_code=404, detail="SEO module disabled")
+
+    body = {}
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        body = {}
+
+    entity_type = str(body.get("entityType") or request.query_params.get("entityType") or "").strip().lower()
+    if entity_type not in ("country", "region"):
+        raise HTTPException(status_code=400, detail="entityType must be country|region")
+
+    action = str(body.get("action") or request.query_params.get("action") or "queue").strip().lower()
+    if action not in ("queue", "generate", "publish"):
+        raise HTTPException(status_code=400, detail="action must be queue|generate|publish")
+
+    try:
+        limit = int(body.get("limit") or request.query_params.get("limit") or 10)
+    except Exception:
+        limit = 10
+    limit = max(1, min(100, limit))
+
+    try:
+        min_score_raw = body.get("minScore") if body.get("minScore") is not None else request.query_params.get("minScore")
+        min_score = float(min_score_raw if min_score_raw is not None else 0)
+    except Exception:
+        min_score = 0.0
+
+    with db_connect(DB_PATH) as conn:
+        entities = conn.execute(
+            """
+            SELECT id, entity_type, entity_key, slug, title, country, region, status, score
+            FROM seo_entities
+            WHERE entity_type=? AND indexable=1 AND score>=?
+            ORDER BY score DESC, updated_at DESC
+            LIMIT ?
+            """,
+            (entity_type, min_score, limit),
+        ).fetchall()
+
+    if not entities:
+        return {
+            "ok": True,
+            "queued": 0,
+            "started": 0,
+            "skipped": 0,
+            "errors": [],
+            "message": "No SEO entities found for selected type.",
+        }
+
+    queued = 0
+    skipped = 0
+    errors = []
+    job_ids = []
+    process_ids = []
+
+    for e in entities:
+        entity_id, et, entity_key, slug, title, country, region, estatus, score = e
+        seo_slug = (slug or "").strip() or _slugify(title or entity_key or f"{et}-{entity_id}")
+        topic, category = _seo_topic_for_entity(et, title or "", country or "", region or "")
+
+        try:
+            with db_connect(DB_PATH) as conn:
+                # 1) First, bind by SEO entity (stable), to avoid duplicate jobs for same country/region.
+                ex = conn.execute(
+                    """
+                    SELECT sj.id
+                    FROM seo_jobs sj
+                    JOIN jobs j ON j.id = sj.id
+                    WHERE sj.entity_id=? AND sj.entity_type=?
+                    ORDER BY sj.updated_at DESC
+                    LIMIT 1
+                    """,
+                    (entity_id, et),
+                ).fetchone()
+
+                # 2) Fallback by canonical slug (legacy compatibility).
+                if not ex:
+                    ex = conn.execute(
+                        "SELECT id FROM jobs WHERE slug=? ORDER BY created_at DESC LIMIT 1",
+                        (seo_slug,),
+                    ).fetchone()
+
+                if ex:
+                    job_id = ex[0]
+                    skipped += 1
+                else:
+                    job_id = secrets.token_hex(12)
+                    now = utcnow_iso()
+                    conn.execute(
+                        """
+                        INSERT INTO jobs (
+                            id, topic, slug, status, category, visibility,
+                            product_mode, engagement_mode, lead_magnet_mode, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, 'NEW', ?, 'public', 0, 0, 0, ?, ?)
+                        """,
+                        (job_id, topic, seo_slug, category, now, now),
+                    )
+                    queued += 1
+
+                now = utcnow_iso()
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO seo_jobs (id, entity_id, entity_type, status, error, output_path, created_at, updated_at)
+                    VALUES (
+                        ?, ?, ?,
+                        ?,
+                        NULL,
+                        COALESCE((SELECT output_path FROM seo_jobs WHERE id=?), NULL),
+                        COALESCE((SELECT created_at FROM seo_jobs WHERE id=?), ?),
+                        ?
+                    )
+                    """,
+                    (job_id, entity_id, et, "QUEUED", job_id, job_id, now, now),
+                )
+        except Exception as q_err:
+            errors.append({"entityId": entity_id, "step": "queue", "error": str(q_err)})
+            continue
+
+        job_ids.append(job_id)
+        if action in ("generate", "publish"):
+            process_ids.append(job_id)
+
+    started = 0
+    if process_ids:
+        t = threading.Thread(target=_seo_run_job_pipeline, args=(process_ids, action), daemon=True)
+        t.start()
+        started = len(process_ids)
+
+    return {
+        "ok": True,
+        "entityType": entity_type,
+        "action": action,
+        "queued": queued,
+        "started": started,
+        "skipped": skipped,
+        "jobIds": job_ids,
+        "errors": errors,
+    }
+
+
+
+
+@app.get("/seo/preview/{job_id}", response_class=HTMLResponse)
+def seo_preview(job_id: str):
+    return preview(job_id)
+
+
+@app.post("/api/seo/jobs/{job_id}/generate")
+def seo_generate_job(job_id: str):
+    if not _seo_enabled():
+        raise HTTPException(status_code=404, detail="SEO module disabled")
+
+    with db_connect(DB_PATH) as conn:
+        exists = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Job not found")
+        seo_row = conn.execute("SELECT id FROM seo_jobs WHERE id=?", (job_id,)).fetchone()
+        now = utcnow_iso()
+        if seo_row:
+            conn.execute("UPDATE seo_jobs SET status='GENERATING', error=NULL, updated_at=? WHERE id=?", (now, job_id))
+
+    ok = True
+    err = None
+    try:
+        res = generate(job_id)
+        if isinstance(res, JSONResponse):
+            ok = False
+            try:
+                payload = json.loads(res.body.decode("utf-8"))
+                ok = bool(payload.get("success"))
+                if not ok:
+                    err = payload.get("error") or "generate failed"
+            except Exception:
+                err = "generate returned invalid response"
+        elif isinstance(res, dict):
+            ok = bool(res.get("success", True))
+            if not ok:
+                err = res.get("error") or "generate failed"
+    except Exception as e:
+        ok = False
+        err = str(e) or "generate exception"
+
+    with db_connect(DB_PATH) as conn:
+        row = conn.execute("SELECT status FROM jobs WHERE id=?", (job_id,)).fetchone()
+        job_status = row[0] if row else "UNKNOWN"
+        if conn.execute("SELECT 1 FROM seo_jobs WHERE id=?", (job_id,)).fetchone():
+            if ok:
+                conn.execute("UPDATE seo_jobs SET status='GENERATED', error=NULL, updated_at=? WHERE id=?", (utcnow_iso(), job_id))
+            else:
+                conn.execute("UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?", (err or "generate failed", utcnow_iso(), job_id))
+
+    return {"ok": ok, "jobId": job_id, "jobStatus": job_status, "error": err}
+
+
+@app.post("/api/seo/jobs/{job_id}/publish")
+def seo_publish_job(job_id: str):
+    if not _seo_enabled():
+        raise HTTPException(status_code=404, detail="SEO module disabled")
+
+    with db_connect(DB_PATH) as conn:
+        exists = conn.execute("SELECT 1 FROM jobs WHERE id=?", (job_id,)).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="Job not found")
+        if conn.execute("SELECT 1 FROM seo_jobs WHERE id=?", (job_id,)).fetchone():
+            conn.execute("UPDATE seo_jobs SET status='PUBLISHING', error=NULL, updated_at=? WHERE id=?", (utcnow_iso(), job_id))
+
+    ok = True
+    err = None
+    published_url = None
+    try:
+        pub = publish(job_id)
+        if isinstance(pub, dict):
+            ok = bool(pub.get("success", False))
+            published_url = pub.get("url")
+            if not ok:
+                err = pub.get("error") or "publish failed"
+    except Exception as e:
+        ok = False
+        err = str(e) or "publish exception"
+
+    with db_connect(DB_PATH) as conn:
+        row = conn.execute("SELECT status,published_url,slug FROM jobs WHERE id=?", (job_id,)).fetchone()
+        job_status = row[0] if row else "UNKNOWN"
+        published_url = (row[1] if row else None) or published_url
+        slug = row[2] if row else None
+        output_path = published_url or (f"/blog/{slug}/" if slug else None)
+        if conn.execute("SELECT 1 FROM seo_jobs WHERE id=?", (job_id,)).fetchone():
+            if ok:
+                conn.execute("UPDATE seo_jobs SET status='PUBLISHED', error=NULL, output_path=?, updated_at=? WHERE id=?", (output_path, utcnow_iso(), job_id))
+            else:
+                conn.execute("UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?", (err or "publish failed", utcnow_iso(), job_id))
+
+    return {"ok": ok, "jobId": job_id, "jobStatus": job_status, "publishedUrl": published_url, "error": err}
+
 @app.get("/api/jobs")
 def list_jobs():
     # Keep UI responsive: clear stale async statuses on polling.
     try:
         _mark_stale_social_postings(max_age_min=12)
         _mark_stale_generating_jobs(max_age_min=60)
+        _mark_stale_seo_jobs(max_age_min=60)
     except Exception:
         pass
 
@@ -2015,6 +3014,7 @@ def generate(job_id: str):
     for attempt in range(1, 4):
         try:
             log_event(DB_PATH, job_id, "INFO", f"Generate attempt {attempt}/3")
+            _active_gemini_api_key()
             draft = generate_draft(
                 topic=topic,
                 existing_posts=existing,
@@ -2029,11 +3029,33 @@ def generate(job_id: str):
                 problems=problems if attempt > 1 else None,
             )
         except Exception as e:
+            if _is_gemini_runtime_error(e) and _switch_gemini_to_backup(str(e), job_id=job_id):
+                try:
+                    _active_gemini_api_key()
+                    draft = generate_draft(
+                        topic=topic,
+                        existing_posts=existing,
+                        category=category,
+                        hero_image=hero_image,
+                        slug_hint=slug,
+                        source_html=_sanitize_source_html(draft_html) if (draft_html and status != "NEW") else None,
+                        product_mode=bool(product_mode),
+                        engagement_mode=bool(engagement_mode),
+                        lead_magnet_mode=bool(lead_magnet_mode),
+                        previous=draft,
+                        problems=problems if attempt > 1 else None,
+                    )
+                except Exception as e2:
+                    msg = f"Generation failed: {e2}"
+                    log_event(DB_PATH, job_id, "WARN", msg)
+                    problems = [msg]
+                    continue
+            else:
             # Do not fail the job immediately; keep retrying (model JSON can be flaky).
-            msg = f"Generation failed: {e}"
-            log_event(DB_PATH, job_id, "WARN", msg)
-            problems = [msg]
-            continue
+                msg = f"Generation failed: {e}"
+                log_event(DB_PATH, job_id, "WARN", msg)
+                problems = [msg]
+                continue
         before_desc = (draft.get("description") or "").strip()
         draft["description"] = fit_meta_description(draft.get("description"), fallback=topic or draft.get("title"))
         if draft["description"] != before_desc:
@@ -2086,7 +3108,7 @@ def generate(job_id: str):
     # Generate hero + inline images immediately after successful draft generation
     # so Preview already shows real media (not only after Publish).
     try:
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        api_key = _active_gemini_api_key()
         image_model = (
             os.environ.get("GEMINI_IMAGE_MODEL")
             or os.environ.get("GEMINI_MODEL_IMAGE")
@@ -2108,7 +3130,28 @@ def generate(job_id: str):
         if generated:
             log_event(DB_PATH, job_id, "INFO", f"Generated {len(generated)} image files for preview")
     except Exception as e:
-        log_event(DB_PATH, job_id, "WARN", f"Image generation during generate failed: {e}")
+        if _is_gemini_runtime_error(e) and _switch_gemini_to_backup(str(e), job_id=job_id):
+            try:
+                api_key = _active_gemini_api_key()
+                hero_file, content_html, generated = ensure_hero_and_inline_images(
+                    api_key=api_key,
+                    image_model=image_model,
+                    blog_dir=BLOG_DIR,
+                    slug=draft.get("slug") or slug or _id,
+                    topic=topic or draft.get("title") or "",
+                    title=draft.get("title") or "",
+                    category=draft.get("category") or category or "Buying Guides",
+                    hero_image_hint=draft.get("heroImage") or hero_image,
+                    content_html=draft.get("contentHtml") or "",
+                )
+                draft["heroImage"] = hero_file
+                draft["contentHtml"] = content_html
+                if generated:
+                    log_event(DB_PATH, job_id, "INFO", f"Generated {len(generated)} image files for preview (backup key)")
+            except Exception as e2:
+                log_event(DB_PATH, job_id, "WARN", f"Image generation during generate failed: {e2}")
+        else:
+            log_event(DB_PATH, job_id, "WARN", f"Image generation during generate failed: {e}")
 
     now = utcnow_iso()
     with db_connect(DB_PATH) as conn:
@@ -2211,10 +3254,16 @@ def publish(job_id: str):
 
     _ensure_sitemap(SITEMAP_PATH)
 
-    log_event(DB_PATH, job_id, "INFO", f"Publishing to landing (visibility={visibility})")
+    section = _seo_section_for_job(job_id)
+    is_section_page = bool(section)
+    log_event(DB_PATH, job_id, "INFO", f"Publishing (visibility={visibility}, section={section or 'blog'})")
+
+    if is_section_page:
+        # SEO landings must have richer visual density than regular blog posts.
+        content_html = _ensure_min_inline_placeholders(content_html, slug=slug, min_images=3)
 
     # Auto-generate hero + inline images into /var/www/landing/blog
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    api_key = _active_gemini_api_key()
     image_model = (
         os.environ.get("GEMINI_IMAGE_MODEL")
         or os.environ.get("GEMINI_MODEL_IMAGE")
@@ -2240,53 +3289,100 @@ def publish(job_id: str):
         if hero and os.path.exists(os.path.join(BLOG_DIR, os.path.basename(hero))):
             image_paths.append(os.path.join("blog", os.path.basename(hero)))
     except Exception as e:
-        log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e}")
+        if _is_gemini_runtime_error(e) and _switch_gemini_to_backup(str(e), job_id=job_id):
+            try:
+                api_key = _active_gemini_api_key()
+                hero_file, content_html, generated = ensure_hero_and_inline_images(
+                    api_key=api_key,
+                    image_model=image_model,
+                    blog_dir=BLOG_DIR,
+                    slug=slug,
+                    topic=topic or title or slug,
+                    title=title or "",
+                    category=cat or "Buying Guides",
+                    hero_image_hint=hero,
+                    content_html=content_html,
+                )
+                hero = hero_file
+                image_paths = [os.path.join("blog", g.filename) for g in (generated or [])]
+                if hero and os.path.exists(os.path.join(BLOG_DIR, os.path.basename(hero))):
+                    image_paths.append(os.path.join("blog", os.path.basename(hero)))
+                log_event(DB_PATH, job_id, "INFO", "Image generation recovered with backup Gemini key")
+            except Exception as e2:
+                log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e2}")
+        else:
+            log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e}")
 
-    # Build/refresh webp variants before rendering cards/feed.
-    _optimize_site_images()
-
-    html = render_post_html(
-        blog_dir=BLOG_DIR,
-        title=title or "",
-        description=desc or "",
-        category=cat or "Buying Guides",
-        slug=slug,
-        hero_image=hero or "logo.png",
-        content_html=content_html,
-        faq=faq,
-        sources=sources,
-        updated_at=updated_at or utcnow_iso(),
-        noindex=noindex,
-    )
-
-    html = _apply_hreflang_block(html, slug, "en")
-    out_path = os.path.join(BLOG_DIR, f"{slug}.html")
-    with open(out_path, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    url = f"{_site_origin()}/blog/{slug}.html"
-
-    # Update blog index and sitemap according to visibility.
-    if noindex:
-        remove_blog_index_card(BLOG_DIR, slug=slug)
-        remove_sitemap_url(SITEMAP_PATH, url=url)
-    else:
-        upsert_blog_index_card(
-            BLOG_DIR,
+    if is_section_page:
+        html = _render_seo_section_html(
+            title=title or "",
+            description=desc or "",
+            section=section,
             slug=slug,
+            hero_image=hero or "logo.png",
+            content_html=content_html,
+            updated_at=updated_at or utcnow_iso(),
+            locale="en",
+            noindex=noindex,
+        )
+    else:
+        html = render_post_html(
+            blog_dir=BLOG_DIR,
             title=title or "",
             description=desc or "",
             category=cat or "Buying Guides",
-            hero_image=os.path.basename(hero or "logo.png"),
+            slug=slug,
+            hero_image=hero or "logo.png",
+            content_html=content_html,
+            faq=faq,
+            sources=sources,
+            updated_at=updated_at or utcnow_iso(),
+            noindex=noindex,
         )
-        upsert_sitemap_url(SITEMAP_PATH, url=url)
 
-    _rebuild_blog_feed_from_index(os.path.join(BLOG_DIR, "index.html"), os.path.join(BLOG_DIR, "feed.json"))
+    if is_section_page:
+        section_path = f"/{section}/{slug}/"
+        html = _apply_hreflang_block_for_path(html, section_path, "en")
+        out_abs = os.path.join(LANDING_DIR, section, slug, "index.html")
+        out_rel = os.path.join(section, slug, "index.html")
+        url = _section_url(section, slug, "en")
+    else:
+        html = _apply_hreflang_block(html, slug, "en")
+        out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
+        out_rel = os.path.join("blog", f"{slug}.html")
+        url = f"{_site_origin()}/blog/{slug}.html"
 
-    paths = [os.path.join("blog", f"{slug}.html"), os.path.join("blog", "index.html"), os.path.join("blog", "feed.json"), "sitemap-en.xml"] + (image_paths or [])
+    os.makedirs(os.path.dirname(out_abs), exist_ok=True)
+    with open(out_abs, "w", encoding="utf-8") as f:
+        f.write(html)
+
+    # Update indexes/sitemaps according to visibility.
+    if is_section_page:
+        if noindex:
+            remove_sitemap_url(SITEMAP_PATH, url=url)
+        else:
+            upsert_sitemap_url(SITEMAP_PATH, url=url)
+        paths = [out_rel, "sitemap-en.xml"] + (image_paths or [])
+    else:
+        if noindex:
+            remove_blog_index_card(BLOG_DIR, slug=slug)
+            remove_sitemap_url(SITEMAP_PATH, url=url)
+        else:
+            upsert_blog_index_card(
+                BLOG_DIR,
+                slug=slug,
+                title=title or "",
+                description=desc or "",
+                category=cat or "Buying Guides",
+                hero_image=os.path.basename(hero or "logo.png"),
+            )
+            upsert_sitemap_url(SITEMAP_PATH, url=url)
+
+        _rebuild_blog_feed_from_index(os.path.join(BLOG_DIR, "index.html"), os.path.join(BLOG_DIR, "feed.json"))
+        paths = [out_rel, os.path.join("blog", "index.html"), os.path.join("blog", "feed.json"), "sitemap-en.xml"] + (image_paths or [])
 
     # Publish localized versions (ru/es/de/fr) in the same publish action.
-    text_api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    text_api_key = _active_gemini_api_key()
     text_model = (
         os.environ.get("GEMINI_TEXT_MODEL")
         or os.environ.get("GEMINI_MODEL_TEXT")
@@ -2301,11 +3397,21 @@ def publish(job_id: str):
     }
     for loc in LOCALES:
         _ensure_sitemap(_locale_sitemap_path(loc))
-        loc_blog_dir = _locale_blog_dir(loc)
         loc_sitemap = _locale_sitemap_path(loc)
-        loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
-        loc_out_rel = os.path.join(loc, "blog", f"{slug}.html")
-        loc_idx_rel = os.path.join(loc, "blog", "index.html")
+
+        if is_section_page:
+            loc_out_abs = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
+            loc_out_rel = os.path.join(loc, section, slug, "index.html")
+            loc_url = _section_url(section, slug, loc)
+            loc_blog_dir = None
+            loc_idx_rel = None
+        else:
+            loc_blog_dir = _locale_blog_dir(loc)
+            loc_out_abs = os.path.join(loc_blog_dir, f"{slug}.html")
+            loc_out_rel = os.path.join(loc, "blog", f"{slug}.html")
+            loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+            loc_idx_rel = os.path.join(loc, "blog", "index.html")
+
         loc_title = title or ""
         loc_desc = desc or ""
         loc_cat = cat or "Buying Guides"
@@ -2314,17 +3420,35 @@ def publish(job_id: str):
         loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=cat, content_html=loc_content), loc)
 
         if text_api_key:
-            tr = _translate_post_payload(
-                api_key=text_api_key,
-                model=text_model,
-                locale=loc,
-                slug=slug,
-                title=loc_title,
-                description=loc_desc,
-                category=loc_cat,
-                content_html=loc_content,
-                faq=loc_faq,
-            )
+            try:
+                tr = _translate_post_payload(
+                    api_key=text_api_key,
+                    model=text_model,
+                    locale=loc,
+                    slug=slug,
+                    title=loc_title,
+                    description=loc_desc,
+                    category=loc_cat,
+                    content_html=loc_content,
+                    faq=loc_faq,
+                )
+            except Exception as tr_err:
+                if _is_gemini_runtime_error(tr_err) and _switch_gemini_to_backup(str(tr_err), job_id=job_id):
+                    text_api_key = _active_gemini_api_key()
+                    tr = _translate_post_payload(
+                        api_key=text_api_key,
+                        model=text_model,
+                        locale=loc,
+                        slug=slug,
+                        title=loc_title,
+                        description=loc_desc,
+                        category=loc_cat,
+                        content_html=loc_content,
+                        faq=loc_faq,
+                    )
+                    log_event(DB_PATH, job_id, "INFO", f"Localization {loc} recovered with backup Gemini key")
+                else:
+                    raise
             loc_title = tr["title"]
             loc_desc = tr["description"]
             loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
@@ -2333,50 +3457,77 @@ def publish(job_id: str):
         else:
             raise HTTPException(status_code=500, detail=f"Localization {loc} failed: no GEMINI_API_KEY/GOOGLE_API_KEY")
 
-        loc_html = render_post_html(
-            blog_dir=BLOG_DIR,
-            title=loc_title,
-            description=loc_desc,
-            category=loc_cat,
-            slug=slug,
-            hero_image=hero or "logo.png",
-            content_html=loc_content,
-            faq=loc_faq,
-            sources=sources,
-            updated_at=updated_at or utcnow_iso(),
-            noindex=noindex,
-            toc_title=toc_titles.get(loc, "On this page"),
-        )
-        loc_html = re.sub(r'(?is)<html\s+lang="[^"]+"', f'<html lang="{loc}"', loc_html, count=1)
-        loc_html = _apply_hreflang_block(loc_html, slug, loc)
-
-        os.makedirs(loc_blog_dir, exist_ok=True)
-        with open(os.path.join(loc_blog_dir, f"{slug}.html"), "w", encoding="utf-8") as f:
-            f.write(loc_html)
-
-        if noindex:
-            remove_blog_index_card(
-                loc_blog_dir,
+        if is_section_page:
+            loc_html = _render_seo_section_html(
+                title=loc_title,
+                description=loc_desc,
+                section=section,
                 slug=slug,
-                href_prefix=f"/{loc}/blog",
-                marker_prefix=f"FACTORY-{loc.upper()}",
+                hero_image=hero or "logo.png",
+                content_html=loc_content,
+                updated_at=updated_at or utcnow_iso(),
+                locale=loc,
+                noindex=noindex,
             )
-            remove_sitemap_url(loc_sitemap, url=loc_url)
         else:
-            upsert_blog_index_card(
-                loc_blog_dir,
-                slug=slug,
+            loc_html = render_post_html(
+                blog_dir=BLOG_DIR,
                 title=loc_title,
                 description=loc_desc,
                 category=loc_cat,
-                hero_image=f"/blog/{os.path.basename(hero or 'logo.png')}",
-                href_prefix=f"/{loc}/blog",
-                marker_prefix=f"FACTORY-{loc.upper()}",
+                slug=slug,
+                hero_image=hero or "logo.png",
+                content_html=loc_content,
+                faq=loc_faq,
+                sources=sources,
+                updated_at=updated_at or utcnow_iso(),
+                noindex=noindex,
+                toc_title=toc_titles.get(loc, "On this page"),
             )
-            upsert_sitemap_url(loc_sitemap, url=loc_url)
+            loc_html = re.sub(r'(?is)<html\s+lang="[^"]+"', f'<html lang="{loc}"', loc_html, count=1)
+        if is_section_page:
+            loc_html = _apply_hreflang_block_for_path(loc_html, f"/{section}/{slug}/", loc)
+        else:
+            loc_html = _apply_hreflang_block(loc_html, slug, loc)
 
-        _rebuild_blog_feed_from_index(os.path.join(loc_blog_dir, "index.html"), os.path.join(loc_blog_dir, "feed.json"))
-        paths.extend([loc_out_rel, loc_idx_rel, os.path.join(loc, "blog", "feed.json"), f"sitemap-{loc}.xml"])
+        os.makedirs(os.path.dirname(loc_out_abs), exist_ok=True)
+        with open(loc_out_abs, "w", encoding="utf-8") as f:
+            f.write(loc_html)
+
+        if is_section_page:
+            if noindex:
+                remove_sitemap_url(loc_sitemap, url=loc_url)
+            else:
+                upsert_sitemap_url(loc_sitemap, url=loc_url)
+            paths.extend([loc_out_rel, f"sitemap-{loc}.xml"])
+        else:
+            if noindex:
+                remove_blog_index_card(
+                    loc_blog_dir,
+                    slug=slug,
+                    href_prefix=f"/{loc}/blog",
+                    marker_prefix=f"FACTORY-{loc.upper()}",
+                )
+                remove_sitemap_url(loc_sitemap, url=loc_url)
+            else:
+                upsert_blog_index_card(
+                    loc_blog_dir,
+                    slug=slug,
+                    title=loc_title,
+                    description=loc_desc,
+                    category=loc_cat,
+                    hero_image=f"/blog/{os.path.basename(hero or 'logo.png')}",
+                    href_prefix=f"/{loc}/blog",
+                    marker_prefix=f"FACTORY-{loc.upper()}",
+                )
+                upsert_sitemap_url(loc_sitemap, url=loc_url)
+
+            _rebuild_blog_feed_from_index(os.path.join(loc_blog_dir, "index.html"), os.path.join(loc_blog_dir, "feed.json"))
+            paths.extend([loc_out_rel, loc_idx_rel, os.path.join(loc, "blog", "feed.json"), f"sitemap-{loc}.xml"])
+
+    # Run the same global image optimization pipeline after writing all HTMLs,
+    # so new article references are rewritten to .webp in one standard place.
+    _optimize_site_images()
 
     # de-dupe while preserving order
     seen = set()
@@ -2592,34 +3743,59 @@ def unpublish(job_id: str):
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
 
-    out_rel = os.path.join("blog", f"{slug}.html")
-    out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
-    url = f"{_site_origin()}/blog/{slug}.html"
-    remove_paths = [out_rel]
-    add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
+    section = _seo_section_for_job(job_id)
+    is_section_page = bool(section)
 
-    if os.path.exists(out_abs):
-        os.remove(out_abs)
+    if is_section_page:
+        out_rel = os.path.join(section, slug, "index.html")
+        out_abs = os.path.join(LANDING_DIR, section, slug, "index.html")
+        url = _section_url(section, slug, "en")
+        remove_paths = [out_rel]
+        add_paths = ["sitemap-en.xml"]
 
-    remove_blog_index_card(BLOG_DIR, slug=slug)
-    remove_sitemap_url(SITEMAP_PATH, url=url)
+        if os.path.exists(out_abs):
+            os.remove(out_abs)
 
-    for loc in LOCALES:
-        loc_blog_dir = _locale_blog_dir(loc)
-        loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
-        loc_rel = os.path.join(loc, "blog", f"{slug}.html")
-        loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
-        if os.path.exists(loc_abs):
-            os.remove(loc_abs)
-        remove_blog_index_card(
-            loc_blog_dir,
-            slug=slug,
-            href_prefix=f"/{loc}/blog",
-            marker_prefix=f"FACTORY-{loc.upper()}",
-        )
-        remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
-        remove_paths.append(loc_rel)
-        add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
+        remove_sitemap_url(SITEMAP_PATH, url=url)
+
+        for loc in LOCALES:
+            loc_abs = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
+            loc_rel = os.path.join(loc, section, slug, "index.html")
+            loc_url = _section_url(section, slug, loc)
+            if os.path.exists(loc_abs):
+                os.remove(loc_abs)
+            remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
+            remove_paths.append(loc_rel)
+            add_paths.append(f"sitemap-{loc}.xml")
+    else:
+        out_rel = os.path.join("blog", f"{slug}.html")
+        out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
+        url = f"{_site_origin()}/blog/{slug}.html"
+        remove_paths = [out_rel]
+        add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
+
+        if os.path.exists(out_abs):
+            os.remove(out_abs)
+
+        remove_blog_index_card(BLOG_DIR, slug=slug)
+        remove_sitemap_url(SITEMAP_PATH, url=url)
+
+        for loc in LOCALES:
+            loc_blog_dir = _locale_blog_dir(loc)
+            loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
+            loc_rel = os.path.join(loc, "blog", f"{slug}.html")
+            loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+            if os.path.exists(loc_abs):
+                os.remove(loc_abs)
+            remove_blog_index_card(
+                loc_blog_dir,
+                slug=slug,
+                href_prefix=f"/{loc}/blog",
+                marker_prefix=f"FACTORY-{loc.upper()}",
+            )
+            remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
+            remove_paths.append(loc_rel)
+            add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
 
     git_commit_push_with_remove(
         repo_dir=LANDING_DIR,
@@ -2653,40 +3829,70 @@ def delete_job(job_id: str):
 
     removed_paths: list[str] = []
 
+    section = _seo_section_for_job(job_id)
+    is_section_page = bool(section)
+
     if slug:
-        out_rel = os.path.join("blog", f"{slug}.html")
-        out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
-        url = f"{_site_origin()}/blog/{slug}.html"
+        if is_section_page:
+            out_rel = os.path.join(section, slug, "index.html")
+            out_abs = os.path.join(LANDING_DIR, section, slug, "index.html")
+            url = _section_url(section, slug, "en")
 
-        if os.path.exists(out_abs):
-            os.remove(out_abs)
-            removed_paths.append(out_rel)
+            if os.path.exists(out_abs):
+                os.remove(out_abs)
+                removed_paths.append(out_rel)
 
-        remove_blog_index_card(BLOG_DIR, slug=slug)
-        remove_sitemap_url(SITEMAP_PATH, url=url)
+            remove_sitemap_url(SITEMAP_PATH, url=url)
 
-        for loc in LOCALES:
-            loc_blog_dir = _locale_blog_dir(loc)
-            loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
-            loc_rel = os.path.join(loc, "blog", f"{slug}.html")
-            loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+            for loc in LOCALES:
+                loc_abs = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
+                loc_rel = os.path.join(loc, section, slug, "index.html")
+                loc_url = _section_url(section, slug, loc)
 
-            if os.path.exists(loc_abs):
-                os.remove(loc_abs)
-                removed_paths.append(loc_rel)
+                if os.path.exists(loc_abs):
+                    os.remove(loc_abs)
+                    removed_paths.append(loc_rel)
 
-            remove_blog_index_card(
-                loc_blog_dir,
-                slug=slug,
-                href_prefix=f"/{loc}/blog",
-                marker_prefix=f"FACTORY-{loc.upper()}",
-            )
-            remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
+                remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
+        else:
+            out_rel = os.path.join("blog", f"{slug}.html")
+            out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
+            url = f"{_site_origin()}/blog/{slug}.html"
+
+            if os.path.exists(out_abs):
+                os.remove(out_abs)
+                removed_paths.append(out_rel)
+
+            remove_blog_index_card(BLOG_DIR, slug=slug)
+            remove_sitemap_url(SITEMAP_PATH, url=url)
+
+            for loc in LOCALES:
+                loc_blog_dir = _locale_blog_dir(loc)
+                loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
+                loc_rel = os.path.join(loc, "blog", f"{slug}.html")
+                loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+
+                if os.path.exists(loc_abs):
+                    os.remove(loc_abs)
+                    removed_paths.append(loc_rel)
+
+                remove_blog_index_card(
+                    loc_blog_dir,
+                    slug=slug,
+                    href_prefix=f"/{loc}/blog",
+                    marker_prefix=f"FACTORY-{loc.upper()}",
+                )
+                remove_sitemap_url(_locale_sitemap_path(loc), url=loc_url)
 
     if removed_paths:
-        add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
-        for loc in LOCALES:
-            add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
+        if is_section_page:
+            add_paths = ["sitemap-en.xml"]
+            for loc in LOCALES:
+                add_paths.append(f"sitemap-{loc}.xml")
+        else:
+            add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
+            for loc in LOCALES:
+                add_paths.extend([os.path.join(loc, "blog", "index.html"), f"sitemap-{loc}.xml"])
         git_commit_push_with_remove(
             repo_dir=LANDING_DIR,
             message=f"Delete factory post: {slug}",
@@ -2697,6 +3903,7 @@ def delete_job(job_id: str):
     with db_connect(DB_PATH) as conn:
         conn.execute("DELETE FROM jobs WHERE id=?", (job_id,))
         conn.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,))
+        conn.execute("DELETE FROM seo_jobs WHERE id=?", (job_id,))
 
     return {"success": True}
 
@@ -3219,6 +4426,11 @@ async def settings_social_put(request: Request):
         if key not in SOCIAL_ENV_KEYS:
             continue
         val = str(v or "").strip()
+        if key == "GEMINI_ACTIVE_KEY":
+            vv = val.lower()
+            if vv and vv not in ("primary", "backup"):
+                raise HTTPException(status_code=400, detail="GEMINI_ACTIVE_KEY must be primary|backup")
+            val = vv
         if key == "LINKEDIN_ORG_URN" and val:
             try:
                 val = _normalize_linkedin_org_urn(val)
@@ -3252,6 +4464,8 @@ async def settings_social_put(request: Request):
         updates["X_ACCESS_TOKEN_SECRET"] = updates["TWITTER_ACCESS_TOKEN_SECRET"]
     if "GEMINI_API_KEY" in updates:
         updates["GOOGLE_API_KEY"] = updates["GEMINI_API_KEY"]
+    if "GEMINI_API_KEY_BACKUP" in updates:
+        updates["GOOGLE_API_KEY_BACKUP"] = updates["GEMINI_API_KEY_BACKUP"]
     if "GEMINI_TEXT_MODEL" in updates:
         updates["GEMINI_MODEL_TEXT"] = updates["GEMINI_TEXT_MODEL"]
     if "GEMINI_IMAGE_MODEL" in updates:
@@ -3279,6 +4493,8 @@ async def settings_social_put(request: Request):
         clears.add("X_ACCESS_TOKEN_SECRET")
     if "GEMINI_API_KEY" in clears:
         clears.add("GOOGLE_API_KEY")
+    if "GEMINI_API_KEY_BACKUP" in clears:
+        clears.add("GOOGLE_API_KEY_BACKUP")
     if "GEMINI_TEXT_MODEL" in clears:
         clears.add("GEMINI_MODEL_TEXT")
     if "GEMINI_IMAGE_MODEL" in clears:
@@ -3289,12 +4505,29 @@ async def settings_social_put(request: Request):
         if k in clears:
             updates.pop(k, None)
 
+    # Normalize Gemini active key and keep effective env key pinned to active selection.
+    current = _gemini_key_settings()
+    final_primary = updates.get("GEMINI_API_KEY", current.get("primary", ""))
+    final_backup = updates.get("GEMINI_API_KEY_BACKUP", current.get("backup", ""))
+    if "GEMINI_API_KEY" in clears:
+        final_primary = ""
+    if "GEMINI_API_KEY_BACKUP" in clears:
+        final_backup = ""
+    final_active = (updates.get("GEMINI_ACTIVE_KEY") or current.get("active") or "primary").lower()
+    if final_active not in ("primary", "backup"):
+        final_active = "primary"
+    if final_active == "backup" and not final_backup:
+        raise HTTPException(status_code=400, detail="Cannot switch to backup: GEMINI_API_KEY_BACKUP is empty")
+
+    updates["GEMINI_ACTIVE_KEY"] = final_active
+
     _env_write_updates(ENV_PATH, updates, clears)
 
     for k in clears:
         os.environ.pop(k, None)
     for k, v in updates.items():
         os.environ[k] = v
+    _activate_gemini_key(final_active)
 
     snap = _social_settings_snapshot()
     return {
@@ -4018,7 +5251,7 @@ async def api_detect_wine(request: Request):
     page_url = str((body or {}).get("pageUrl") or "").strip()
     text_hint = str((body or {}).get("textHint") or "").strip()
 
-    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+    api_key = (_active_gemini_api_key() or "").strip()
     if not api_key:
         return JSONResponse(status_code=500, content={"error": "GEMINI_API_KEY is not configured."})
 
@@ -4067,31 +5300,38 @@ async def api_detect_wine(request: Request):
     ).strip()
     models_to_try = [preferred_model, "gemini-2.5-flash", "gemini-2.0-flash-lite"]
 
-    data = None
-    last_error = None
-    for model in models_to_try:
-        if not model:
-            continue
-        gemini_url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            + model
-            + ":generateContent?key="
-            + urllib.parse.quote(api_key)
-        )
-        try:
-            req = urllib.request.Request(
-                gemini_url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
+    def _request_with_key(key: str):
+        data_local = None
+        last_local = None
+        for model in models_to_try:
+            if not model:
+                continue
+            gemini_url = (
+                "https://generativelanguage.googleapis.com/v1beta/models/"
+                + model
+                + ":generateContent?key="
+                + urllib.parse.quote(key)
             )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                raw = resp.read().decode("utf-8", errors="replace")
-            data = json.loads(raw)
-            break
-        except Exception as e:
-            last_error = e
-            continue
+            try:
+                req = urllib.request.Request(
+                    gemini_url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=20) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                data_local = json.loads(raw)
+                break
+            except Exception as e:
+                last_local = e
+                continue
+        return data_local, last_local
+
+    data, last_error = _request_with_key(api_key)
+    if data is None and _is_gemini_runtime_error(last_error) and _switch_gemini_to_backup(str(last_error)):
+        api_key = (_active_gemini_api_key() or "").strip()
+        data, last_error = _request_with_key(api_key)
 
     if data is None:
         return JSONResponse(status_code=502, content={"error": f"Gemini request failed: {last_error}"})
@@ -4142,4 +5382,3 @@ async def api_detect_wine(request: Request):
     }
 
     return JSONResponse(content=out, headers={"Access-Control-Allow-Origin": "*"})
-
