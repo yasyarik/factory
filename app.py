@@ -7,6 +7,7 @@ import secrets
 import re
 import threading
 import subprocess
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from typing import Any
 from urllib.parse import urlparse
@@ -671,6 +672,329 @@ def _sanitize_desc_tail(s: str) -> str:
     if out and out[-1] not in ".!?":
         out += "."
     return out
+
+
+
+_COUNTRY_FLAG_CODE = {
+    "argentina": "ar", "australia": "au", "austria": "at", "brazil": "br", "chile": "cl",
+    "france": "fr", "georgia": "ge", "germany": "de", "greece": "gr", "hungary": "hu",
+    "italy": "it", "mexico": "mx", "moldova": "md", "new zealand": "nz", "portugal": "pt",
+    "romania": "ro", "south africa": "za", "spain": "es", "switzerland": "ch",
+    "united states": "us", "uruguay": "uy", "usa": "us", "u.s.": "us",
+}
+
+
+def _country_flag_url(country: str) -> str:
+    code = _COUNTRY_FLAG_CODE.get((country or "").strip().lower(), "")
+    return f"https://flagcdn.com/{code}.svg" if code else ""
+
+
+def _section_entity_type(section: str) -> str | None:
+    sec = (section or "").strip().lower()
+    if sec == "wine-countries":
+        return "country"
+    if sec == "wine-regions":
+        return "region"
+    return None
+
+
+def _refresh_seo_section_indexes(section: str) -> list[str]:
+    et = _section_entity_type(section)
+    if not et:
+        return []
+
+    def _unesc(x: str) -> str:
+        return html_lib.unescape((x or '').strip())
+
+    def _guess_country_from_slug(slug: str) -> str:
+        parts = (slug or '').strip('/').split('-')
+        if len(parts) >= 2:
+            tail = ' '.join(parts[-2:])
+            if tail.lower() in _COUNTRY_FLAG_CODE:
+                return tail
+            one = parts[-1]
+            if one.lower() in _COUNTRY_FLAG_CODE:
+                return one
+        return ''
+
+    # 1) Existing cards from current EN index (so we never drop already visible cards).
+    existing_cards: dict[str, dict[str, str]] = {}
+    en_idx = os.path.join(LANDING_DIR, section, 'index.html')
+    if os.path.exists(en_idx):
+        src = Path(en_idx).read_text(encoding='utf-8')
+        m_grid = re.search(r'<section class="grid">(.*?)</section>', src, flags=re.DOTALL)
+        grid = m_grid.group(1) if m_grid else ''
+        for m in re.finditer(r'<a class="card" href="(?:/[^/]+)?/' + re.escape(section) + r'/([^/]+)/">(.*?)</a>', grid, flags=re.DOTALL):
+            slug = (m.group(1) or '').strip()
+            block = m.group(2) or ''
+            if not slug:
+                continue
+            m_name = re.search(r'<div class="name">(.*?)</div>', block, flags=re.DOTALL)
+            label = _unesc(re.sub(r'<[^>]+>', '', m_name.group(1) if m_name else slug.replace('-', ' ').title()))
+            m_bg = re.search(r"background-image:url\('([^']+)'\)", block)
+            hero_url = (m_bg.group(1).strip() if m_bg else '/logo.png')
+            m_flag = re.search(r'<img[^>]*class="flag-badge"[^>]*src="([^"]+)"', block)
+            flag_url = (m_flag.group(1).strip() if m_flag else '')
+            country = ''
+            if ', ' in label:
+                country = label.split(',')[-1].strip()
+            if not country:
+                country = _guess_country_from_slug(slug)
+            existing_cards[slug] = {
+                'slug': slug,
+                'label': label,
+                'hero_url': hero_url,
+                'flag_url': flag_url,
+                'country': country,
+            }
+
+    # 2) Published cards from DB (override existing where same slug).
+    db_cards: dict[str, dict[str, str]] = {}
+    with db_connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT j.slug, j.hero_image, e.country, e.region
+            FROM seo_jobs sj
+            JOIN seo_entities e ON e.id = sj.entity_id
+            JOIN jobs j ON j.id = sj.id
+            WHERE sj.status='PUBLISHED' AND e.entity_type=?
+            ORDER BY LOWER(COALESCE(e.country,'')), LOWER(COALESCE(e.region,'')), LOWER(COALESCE(j.slug,''))
+            """,
+            (et,),
+        ).fetchall()
+
+    for slug, hero_image, country, region in rows:
+        slug = (slug or '').strip()
+        if not slug:
+            continue
+        country = (country or '').strip()
+        region = (region or '').strip()
+        if et == 'country':
+            label = country or slug.replace('wine-country-', '').replace('-', ' ').title()
+        else:
+            region_label = region or slug.replace('wine-region-', '').replace('wine-guide-', '').replace('-', ' ').title()
+            label = f"{region_label}, {country}" if country else region_label
+        hero = Path((hero_image or '').strip()).name if hero_image else ''
+        hero_url = f"/blog/{hero}" if hero else existing_cards.get(slug, {}).get('hero_url', '/logo.png')
+        flag_url = _country_flag_url(country) or existing_cards.get(slug, {}).get('flag_url', '')
+        db_cards[slug] = {
+            'slug': slug,
+            'label': label,
+            'hero_url': hero_url,
+            'flag_url': flag_url,
+            'country': country,
+        }
+
+    # 3) Merge: keep existing, enrich/override with DB where possible.
+    merged = dict(existing_cards)
+    merged.update(db_cards)
+
+    # 4) Filesystem fallback: keep any existing published section pages visible in index.
+    section_dir = os.path.join(LANDING_DIR, section)
+    if os.path.isdir(section_dir):
+        for name in sorted(os.listdir(section_dir)):
+            slug = (name or '').strip()
+            if not slug or slug == 'index.html':
+                continue
+            dpath = os.path.join(section_dir, slug)
+            ipath = os.path.join(dpath, 'index.html')
+            if not os.path.isdir(dpath) or not os.path.exists(ipath):
+                continue
+            if slug in merged:
+                continue
+
+            country = _guess_country_from_slug(slug)
+            if et == 'country':
+                label = (country or slug.replace('wine-country-', '').replace('-', ' ').title())
+            else:
+                base = slug.replace('wine-region-', '').replace('wine-guide-', '').strip('-')
+                bits = [b for b in base.split('-') if b]
+                region_bits = bits[:-2] if len(bits) >= 3 else bits[:-1]
+                region_label = ' '.join(region_bits).title() if region_bits else base.replace('-', ' ').title()
+                label = f"{region_label}, {country.title()}" if country else region_label
+
+            # Prefer hero extracted from page itself (works for legacy slug patterns like wine-guide-*).
+            hero_url = '/logo.png'
+            try:
+                page_src = Path(ipath).read_text(encoding='utf-8')
+                m_og = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', page_src, flags=re.IGNORECASE)
+                if m_og:
+                    u = (m_og.group(1) or '').strip()
+                    if u.startswith('https://') or u.startswith('http://'):
+                        parsed = urllib.parse.urlparse(u)
+                        if parsed.path:
+                            u = parsed.path
+                    if u.startswith('/blog/'):
+                        hero_url = u
+                if hero_url == '/logo.png':
+                    m_bg = re.search(r"hero-cover[^>]*style=\"background-image:url\('([^']+)'\)\"", page_src, flags=re.IGNORECASE)
+                    if m_bg:
+                        u = (m_bg.group(1) or '').strip()
+                        if u.startswith('/blog/'):
+                            hero_url = u
+            except Exception:
+                pass
+
+            if hero_url == '/logo.png':
+                hero_candidate = f"/blog/{slug}-hero.webp"
+                hero_abs = os.path.join(LANDING_DIR, 'blog', f"{slug}-hero.webp")
+                hero_url = hero_candidate if os.path.exists(hero_abs) else '/logo.png'
+            flag_url = _country_flag_url(country)
+            merged[slug] = {
+                'slug': slug,
+                'label': label,
+                'hero_url': hero_url,
+                'flag_url': flag_url,
+                'country': country,
+            }
+
+    cards = sorted(merged.values(), key=lambda c: ((c.get('country') or '').lower(), (c.get('label') or '').lower(), (c.get('slug') or '').lower()))
+
+    def _country_key(name: str) -> str:
+        k = (name or '').strip().lower()
+        k = re.sub(r"[^a-z0-9]+", '-', k)
+        k = re.sub(r"-+", '-', k).strip('-')
+        return k or 'unknown'
+
+    changed: list[str] = []
+    locales = ['en', *LOCALES]
+    for loc in locales:
+        idx_abs = os.path.join(LANDING_DIR, section, 'index.html') if loc == 'en' else os.path.join(LANDING_DIR, loc, section, 'index.html')
+        if not os.path.exists(idx_abs):
+            continue
+        src = Path(idx_abs).read_text(encoding='utf-8')
+
+        locale_prefix = '' if loc == 'en' else f'/{loc}'
+
+        # Build country chips from currently visible region cards.
+        countries = []
+        seen_c = set()
+        for c in cards:
+            c_name = (c.get('country') or '').strip()
+            if not c_name:
+                continue
+            c_key = _country_key(c_name)
+            if c_key in seen_c:
+                continue
+            seen_c.add(c_key)
+            countries.append({
+                'key': c_key,
+                'name': c_name,
+                'flag': (c.get('flag_url') or '').strip(),
+            })
+        countries = sorted(countries, key=lambda x: x['name'].lower())
+
+        out_cards = []
+        for c in cards:
+            href = f"{locale_prefix}/{section}/{c['slug']}/"
+            country_txt = (c.get('country') or '').strip()
+            country_key = _country_key(country_txt)
+            flag_html = f'<img class="flag-badge" src="{c.get("flag_url", "")}" alt="{html_lib.escape(country_txt)} flag" loading="lazy"/>' if c.get('flag_url') else ''
+            hero_for_card = c.get('hero_url', '/logo.png')
+            if hero_for_card == '/logo.png':
+                try:
+                    page_path = os.path.join(LANDING_DIR, section, c['slug'], 'index.html')
+                    if os.path.exists(page_path):
+                        page_src = Path(page_path).read_text(encoding='utf-8')
+                        m_og = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', page_src, flags=re.IGNORECASE)
+                        if m_og:
+                            u = (m_og.group(1) or '').strip()
+                            if u.startswith('https://') or u.startswith('http://'):
+                                parsed = urllib.parse.urlparse(u)
+                                if parsed.path:
+                                    u = parsed.path
+                            if u.startswith('/blog/'):
+                                hero_for_card = u
+                except Exception:
+                    pass
+            out_cards.append(
+                f'        <a class="card" data-country="{country_key}" href="{href}"><div class="thumb" style="background-image:url(\'{hero_for_card}\')">{flag_html}</div><div class="name">{html_lib.escape(c.get("label", ""))}</div></a>'
+            )
+        grid_html = "\n".join(out_cards)
+        new_src, n = re.subn(
+            r'(<section class="grid">)(.*?)(</section>)',
+            lambda m: m.group(1) + ("\n" + grid_html + "\n      " if grid_html else "") + m.group(3),
+            src,
+            count=1,
+            flags=re.DOTALL,
+        )
+
+        if section == 'wine-regions':
+            all_label = {'en': 'All', 'ru': 'Все', 'es': 'Todos', 'de': 'Alle', 'fr': 'Tous'}.get(loc, 'All')
+            chips = [f'<button class="country-chip is-all is-active" type="button" data-country="all" aria-pressed="true">{all_label}</button>']
+            for ci in countries:
+                flag = f'<img class="country-chip-flag" src="{ci["flag"]}" alt="{html_lib.escape(ci["name"])} flag" loading="lazy"/>' if ci.get('flag') else ''
+                chips.append(f'<button class="country-chip" type="button" data-country="{ci["key"]}" aria-pressed="false">{flag}<span>{html_lib.escape(ci["name"])}</span></button>')
+            chips_html = '<section class="country-filters" data-country-filters>' + ''.join(chips) + '</section>'
+            if '<section class="country-filters"' in new_src:
+                new_src = re.sub(r'<section class="country-filters"[^>]*>.*?</section>', chips_html, new_src, count=1, flags=re.DOTALL)
+            else:
+                new_src = re.sub(r'(<p class="sub">.*?</p>)', r'\1\n      ' + chips_html, new_src, count=1, flags=re.DOTALL)
+
+            css = '''
+    .country-filters{margin-top:14px;display:flex;flex-wrap:wrap;gap:8px}
+    .country-chip{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border-radius:999px;border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--text);font-weight:600;font-size:13px;cursor:pointer}
+    .country-chip:hover{background:rgba(255,255,255,.1)}
+    .country-chip.is-active{background:rgba(151,36,66,.45);border-color:rgba(255,255,255,.35)}
+    .country-chip-flag{width:22px;height:15px;border-radius:3px;object-fit:cover;border:1px solid rgba(255,255,255,.4)}
+    .card.is-hidden{display:none !important}
+    @media (max-width:740px){.country-chip{padding:7px 10px;font-size:12px}.country-chip-flag{width:18px;height:12px}}
+'''
+            if '.country-filters{' not in new_src:
+                new_src = new_src.replace('</style>', css + '\n  </style>', 1)
+
+            js = '''
+<script id="country-filter-script">
+(function(){
+  const root = document.querySelector('[data-country-filters]');
+  const grid = document.querySelector('.grid');
+  if(!root || !grid) return;
+  const chips = Array.from(root.querySelectorAll('.country-chip'));
+  const cards = Array.from(grid.querySelectorAll('.card[data-country]'));
+  let active = new Set();
+
+  const allChip = root.querySelector('.country-chip[data-country="all"]');
+  function sync(){
+    const has = active.size > 0;
+    chips.forEach(ch=>{
+      const key = ch.getAttribute('data-country');
+      const on = key === 'all' ? !has : active.has(key);
+      ch.classList.toggle('is-active', on);
+      ch.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+    cards.forEach(card=>{
+      const k = card.getAttribute('data-country') || '';
+      const show = !has || active.has(k);
+      card.classList.toggle('is-hidden', !show);
+    });
+  }
+
+  chips.forEach(ch=>{
+    ch.addEventListener('click', ()=>{
+      const key = ch.getAttribute('data-country');
+      if(key === 'all'){
+        active.clear();
+        sync();
+        return;
+      }
+      if(active.has(key)) active.delete(key);
+      else active.add(key);
+      sync();
+    });
+  });
+
+  if(allChip){ active.clear(); sync(); }
+})();
+</script>
+'''
+            if 'id="country-filter-script"' not in new_src:
+                new_src = new_src.replace('</body>', js + '\n</body>', 1)
+
+        if n and new_src != src:
+            Path(idx_abs).write_text(new_src, encoding='utf-8')
+            rel = os.path.join(section, 'index.html') if loc == 'en' else os.path.join(loc, section, 'index.html')
+            changed.append(rel)
+    return changed
 
 def _render_seo_section_html(
     *,
@@ -2030,6 +2354,45 @@ def seo_entities_list(entity_type: str = "", limit: int = 200):
     with db_connect(DB_PATH) as conn:
         rows = conn.execute(q, tuple(params)).fetchall()
 
+    # Build effective status from latest seo_jobs/jobs (instead of static seo_entities.status)
+    entity_pairs = [(r[0], r[1]) for r in rows]
+    latest_map = {}
+    if entity_pairs:
+        placeholders = ",".join(["?"] * len(entity_pairs))
+        flat_ids = [eid for eid, _ in entity_pairs]
+        with db_connect(DB_PATH) as conn:
+            sj_rows = conn.execute(
+                f"""
+                SELECT sj.entity_id, sj.entity_type, sj.status, COALESCE(j.status,''), COALESCE(j.published_url,''), sj.updated_at
+                FROM seo_jobs sj
+                LEFT JOIN jobs j ON j.id = sj.id
+                WHERE sj.entity_id IN ({placeholders})
+                ORDER BY sj.updated_at DESC
+                """,
+                tuple(flat_ids),
+            ).fetchall()
+        for x in sj_rows:
+            key = (x[0], x[1])
+            if key not in latest_map:
+                latest_map[key] = x
+
+    def _effective_status(base_status: str, entity_id: int, entity_type: str) -> str:
+        row = latest_map.get((entity_id, entity_type))
+        if not row:
+            return (base_status or "NEW").upper()
+        seo_st = str(row[2] or "").upper()
+        job_st = str(row[3] or "").upper()
+        has_url = bool((row[4] or "").strip())
+        if seo_st == "PUBLISHED" or job_st == "PUBLISHED" or has_url:
+            return "PUBLISHED"
+        if seo_st in ("PUBLISHING", "GENERATING", "QUEUED"):
+            return seo_st
+        if seo_st == "GENERATED" or job_st == "READY":
+            return "GENERATED"
+        if job_st in ("ERROR",):
+            return "ERROR"
+        return seo_st or job_st or (base_status or "NEW").upper()
+
     items = []
     for r in rows:
         items.append({
@@ -2048,7 +2411,8 @@ def seo_entities_list(entity_type: str = "", limit: int = 200):
             "acidity": r[12],
             "score": r[13],
             "indexable": bool(r[14]),
-            "status": r[15],
+            "status": _effective_status(r[15], r[0], r[1]),
+            "rawStatus": r[15],
             "createdAt": r[16],
             "updatedAt": r[17],
         })
@@ -2240,16 +2604,39 @@ async def seo_pages_run(request: Request):
         min_score = 0.0
 
     with db_connect(DB_PATH) as conn:
-        entities = conn.execute(
+        region_country_filter = ""
+        if entity_type == "region":
+            region_country_filter = """
+              AND LOWER(TRIM(COALESCE(e.country,''))) IN (
+                SELECT DISTINCT LOWER(TRIM(COALESCE(c.country,'')))
+                FROM seo_entities c
+                JOIN seo_jobs sjc ON sjc.entity_id=c.id AND sjc.entity_type='country'
+                LEFT JOIN jobs jc ON jc.id=sjc.id
+                WHERE c.entity_type='country'
+                  AND LOWER(TRIM(COALESCE(c.country,'')))<>''
+                  AND (
+                    UPPER(COALESCE(sjc.status,''))='PUBLISHED'
+                    OR UPPER(COALESCE(jc.status,''))='PUBLISHED'
+                    OR COALESCE(jc.published_url,'') LIKE '%/wine-countries/%'
+                  )
+              )
             """
-            SELECT id, entity_type, entity_key, slug, title, country, region, status, score
-            FROM seo_entities
-            WHERE entity_type=? AND indexable=1 AND score>=?
-            ORDER BY score DESC, updated_at DESC
+
+        q = f"""
+            SELECT e.id, e.entity_type, e.entity_key, e.slug, e.title, e.country, e.region, e.status, e.score
+            FROM seo_entities e
+            WHERE e.entity_type=?
+              AND e.indexable=1
+              AND e.score>=?
+              {region_country_filter}
+              AND NOT EXISTS (
+                SELECT 1 FROM seo_jobs sj
+                WHERE sj.entity_id=e.id AND sj.entity_type=e.entity_type
+              )
+            ORDER BY e.score DESC, e.updated_at DESC
             LIMIT ?
-            """,
-            (entity_type, min_score, limit),
-        ).fetchall()
+        """
+        entities = conn.execute(q, (entity_type, min_score, limit)).fetchall()
 
     if not entities:
         return {
@@ -2351,6 +2738,7 @@ async def seo_pages_run(request: Request):
         "started": started,
         "skipped": skipped,
         "jobIds": job_ids,
+        "startedJobIds": process_ids,
         "errors": errors,
     }
 
@@ -2406,6 +2794,8 @@ def seo_generate_job(job_id: str):
             else:
                 conn.execute("UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?", (err or "generate failed", utcnow_iso(), job_id))
 
+    if (not ok) and not err:
+        err = "generate failed"
     return {"ok": ok, "jobId": job_id, "jobStatus": job_status, "error": err}
 
 
@@ -2447,6 +2837,8 @@ def seo_publish_job(job_id: str):
             else:
                 conn.execute("UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?", (err or "publish failed", utcnow_iso(), job_id))
 
+    if (not ok) and not err:
+        err = "publish failed"
     return {"ok": ok, "jobId": job_id, "jobStatus": job_status, "publishedUrl": published_url, "error": err}
 
 @app.get("/api/jobs")
@@ -3580,6 +3972,13 @@ def publish(job_id: str):
 
             _rebuild_blog_feed_from_index(os.path.join(loc_blog_dir, "index.html"), os.path.join(loc_blog_dir, "feed.json"))
             paths.extend([loc_out_rel, loc_idx_rel, os.path.join(loc, "blog", "feed.json"), f"sitemap-{loc}.xml"])
+
+    # Keep /wine-countries/ and /wine-regions/ index pages in sync with newly published section pages.
+    if is_section_page:
+        try:
+            paths.extend(_refresh_seo_section_indexes(section))
+        except Exception as e:
+            log_event(DB_PATH, job_id, "WARN", f"Section index refresh failed: {e}")
 
     # Run global image optimization only for regular blog posts.
     # For SEO country/region pages this is very expensive and not required per publish.
