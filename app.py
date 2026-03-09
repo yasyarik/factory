@@ -513,6 +513,24 @@ def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
             'description': desc,
         })
 
+    # Include published SEO pages (wine-countries / wine-regions) so homepage hero can rotate them too.
+    locale = _feed_locale_from_path(out_path)
+    site_root = _feed_site_root_from_path(out_path)
+    section_posts = _section_feed_posts_for_locale(locale, site_root)
+    if section_posts:
+        seen_mix: set[str] = set()
+        merged_posts: list[dict[str, Any]] = []
+        for item in [*section_posts, *posts]:
+            href_key = str((item.get('href') or '')).strip().lower()
+            title_key = _title_key(str(item.get('title') or ''))
+            key = href_key or title_key
+            if not key or key in seen_mix:
+                continue
+            seen_mix.add(key)
+            item.pop('_ts', None)
+            merged_posts.append(item)
+        posts = merged_posts
+
     out = {'updatedAt': utcnow_iso(), 'posts': posts}
     try:
         with open(out_path, 'w', encoding='utf-8') as f:
@@ -520,6 +538,137 @@ def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
     except Exception:
         return
 
+
+
+def _feed_locale_from_path(path: str) -> str:
+    p = (path or "").replace("\\", "/")
+    m = re.search(r"/(ru|es|de|fr)/blog/feed\.json$", p)
+    return (m.group(1) if m else "en")
+
+
+def _feed_site_root_from_path(path: str) -> str:
+    p = (path or "").replace("\\", "/")
+    m_loc = re.search(r"^(.*)/(ru|es|de|fr)/blog/feed\.json$", p)
+    if m_loc:
+        return m_loc.group(1) or "/"
+    m_en = re.search(r"^(.*)/blog/feed\.json$", p)
+    if m_en:
+        return m_en.group(1) or "/"
+    return LANDING_DIR
+
+
+def _section_feed_posts_for_locale(locale: str, site_root: str) -> list[dict[str, Any]]:
+    loc = (locale or "en").strip().lower() or "en"
+    root = (site_root or LANDING_DIR).rstrip("/") or "/"
+    sec_labels = {
+        "wine-countries": {"en": "Wine Countries", "ru": "Винные страны", "es": "Paises del vino", "de": "Weinlander", "fr": "Pays du vin"},
+        "wine-regions": {"en": "Wine Regions", "ru": "Винные регионы", "es": "Regiones vinicolas", "de": "Weinregionen", "fr": "Regions viticoles"},
+    }
+
+    def _idx_abs(section: str) -> str:
+        if loc == "en":
+            return os.path.join(root, section, "index.html")
+        return os.path.join(root, loc, section, "index.html")
+
+    def _slug_from_href(href: str) -> str:
+        h = (href or "").strip().strip("/")
+        if not h:
+            return ""
+        parts = [x for x in h.split("/") if x]
+        if not parts:
+            return ""
+        return parts[-1]
+
+    def _page_abs(section: str, slug: str) -> str:
+        if loc == "en":
+            return os.path.join(root, section, slug, "index.html")
+        return os.path.join(root, loc, section, slug, "index.html")
+
+    def _safe_img(src: str, section: str, slug: str) -> str:
+        u = (src or "").strip()
+        if u.startswith("http://") or u.startswith("https://"):
+            try:
+                parsed = urllib.parse.urlparse(u)
+                if parsed.path:
+                    u = parsed.path
+            except Exception:
+                pass
+        if u and u.startswith("/"):
+            return u
+
+        p_abs = _page_abs(section, slug)
+        if os.path.exists(p_abs):
+            try:
+                page_src = Path(p_abs).read_text(encoding="utf-8")
+                m_og = re.search(r'<meta\s+property="og:image"\s+content="([^"]+)"', page_src, flags=re.IGNORECASE)
+                if m_og:
+                    og = (m_og.group(1) or "").strip()
+                    if og.startswith("http://") or og.startswith("https://"):
+                        parsed = urllib.parse.urlparse(og)
+                        if parsed.path:
+                            og = parsed.path
+                    if og.startswith("/"):
+                        return og
+            except Exception:
+                pass
+        return "/logo.png"
+
+    def _desc_from_page(section: str, slug: str) -> str:
+        p_abs = _page_abs(section, slug)
+        if not os.path.exists(p_abs):
+            return ""
+        try:
+            page_src = Path(p_abs).read_text(encoding="utf-8")
+            m = re.search(r'<meta\s+name="description"\s+content="([^"]+)"', page_src, flags=re.IGNORECASE)
+            if m:
+                return html_lib.unescape((m.group(1) or "").strip())
+        except Exception:
+            return ""
+        return ""
+
+    rows: list[dict[str, Any]] = []
+    for section in ("wine-countries", "wine-regions"):
+        idx = _idx_abs(section)
+        if not os.path.exists(idx):
+            continue
+        try:
+            src = Path(idx).read_text(encoding="utf-8")
+        except Exception:
+            continue
+
+        for m in re.finditer(r'<a\s+class="card"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', src, flags=re.IGNORECASE | re.DOTALL):
+            href = (m.group(1) or "").strip()
+            block = m.group(2) or ""
+            if not href:
+                continue
+            slug = _slug_from_href(href)
+            if not slug:
+                continue
+
+            m_name = re.search(r'<div\s+class="name">(.*?)</div>', block, flags=re.IGNORECASE | re.DOTALL)
+            title = html_lib.unescape(re.sub(r'<[^>]+>', '', (m_name.group(1) if m_name else slug.replace('-', ' ').title()))).strip()
+            m_bg = re.search(r"background-image:url\('([^']+)'\)", block, flags=re.IGNORECASE)
+            img = _safe_img((m_bg.group(1) if m_bg else ""), section, slug)
+            desc = _desc_from_page(section, slug)
+
+            ts = 0.0
+            p_abs = _page_abs(section, slug)
+            try:
+                ts = os.path.getmtime(p_abs) if os.path.exists(p_abs) else os.path.getmtime(idx)
+            except Exception:
+                ts = 0.0
+
+            rows.append({
+                "_ts": ts,
+                "href": href,
+                "image": img,
+                "category": sec_labels.get(section, {}).get(loc, sec_labels.get(section, {}).get("en", "Wine")),
+                "title": title,
+                "description": desc,
+            })
+
+    rows.sort(key=lambda x: x.get("_ts") or 0, reverse=True)
+    return rows
 
 def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
     origin = _site_origin()
@@ -2799,6 +2948,51 @@ def seo_generate_job(job_id: str):
     return {"ok": ok, "jobId": job_id, "jobStatus": job_status, "error": err}
 
 
+def _cleanup_partial_section_publish(section: str, slug: str, job_id: str, reason: str = "") -> None:
+    reason = (reason or "").strip()
+    files_to_remove = [os.path.join(LANDING_DIR, section, slug, "index.html")]
+    for loc in LOCALES:
+        files_to_remove.append(os.path.join(LANDING_DIR, loc, section, slug, "index.html"))
+
+    for fp in files_to_remove:
+        try:
+            if os.path.exists(fp):
+                os.remove(fp)
+        except Exception:
+            pass
+
+    try:
+        remove_sitemap_url(SITEMAP_PATH, url=_section_url(section, slug, "en"))
+        for loc in LOCALES:
+            remove_sitemap_url(_locale_sitemap_path(loc), url=_section_url(section, slug, loc))
+    except Exception:
+        pass
+
+    try:
+        _refresh_seo_section_indexes(section)
+    except Exception as e:
+        if job_id:
+            log_event(DB_PATH, job_id, "WARN", f"Section index refresh after cleanup failed: {e}")
+
+    if job_id:
+        msg = f"Rolled back partial section publish for /{section}/{slug}/"
+        if reason:
+            msg += f" ({reason})"
+        log_event(DB_PATH, job_id, "WARN", msg)
+
+
+def _find_missing_section_locales(section: str, slug: str) -> list[str]:
+    missing: list[str] = []
+    en_path = os.path.join(LANDING_DIR, section, slug, "index.html")
+    if not os.path.exists(en_path):
+        missing.append("en")
+    for loc in LOCALES:
+        loc_path = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
+        if not os.path.exists(loc_path):
+            missing.append(loc)
+    return missing
+
+
 @app.post("/api/seo/jobs/{job_id}/publish")
 def seo_publish_job(job_id: str):
     if not _seo_enabled():
@@ -2825,17 +3019,40 @@ def seo_publish_job(job_id: str):
         ok = False
         err = str(e) or "publish exception"
 
+    section = _seo_section_for_job(job_id)
+
     with db_connect(DB_PATH) as conn:
         row = conn.execute("SELECT status,published_url,slug FROM jobs WHERE id=?", (job_id,)).fetchone()
         job_status = row[0] if row else "UNKNOWN"
         published_url = (row[1] if row else None) or published_url
         slug = row[2] if row else None
-        output_path = published_url or (f"/blog/{slug}/" if slug else None)
+
+    if section and slug:
+        if not ok:
+            _cleanup_partial_section_publish(section, slug, job_id, reason="publish failed")
+        else:
+            missing_locales = _find_missing_section_locales(section, slug)
+            if missing_locales:
+                ok = False
+                err = f"incomplete localization publish: missing {','.join(missing_locales)}"
+                _cleanup_partial_section_publish(section, slug, job_id, reason=err)
+                published_url = None
+                job_status = "ERROR"
+
+    if not ok:
+        with db_connect(DB_PATH) as conn:
+            conn.execute(
+                "UPDATE jobs SET status='ERROR', error=?, published_url=NULL, updated_at=? WHERE id=?",
+                (err or "publish failed", utcnow_iso(), job_id),
+            )
+
+    output_path = published_url or (f"/blog/{slug}/" if slug else None)
+    with db_connect(DB_PATH) as conn:
         if conn.execute("SELECT 1 FROM seo_jobs WHERE id=?", (job_id,)).fetchone():
             if ok:
                 conn.execute("UPDATE seo_jobs SET status='PUBLISHED', error=NULL, output_path=?, updated_at=? WHERE id=?", (output_path, utcnow_iso(), job_id))
             else:
-                conn.execute("UPDATE seo_jobs SET status='ERROR', error=?, updated_at=? WHERE id=?", (err or "publish failed", utcnow_iso(), job_id))
+                conn.execute("UPDATE seo_jobs SET status='ERROR', error=?, output_path=NULL, updated_at=? WHERE id=?", (err or "publish failed", utcnow_iso(), job_id))
 
     if (not ok) and not err:
         err = "publish failed"
@@ -3980,6 +4197,17 @@ def publish(job_id: str):
         except Exception as e:
             log_event(DB_PATH, job_id, "WARN", f"Section index refresh failed: {e}")
 
+        # Rebuild blog feeds as combined home feed (blog + seo pages), so homepage hero sees new pages immediately.
+        try:
+            _rebuild_blog_feed_from_index(os.path.join(BLOG_DIR, "index.html"), os.path.join(BLOG_DIR, "feed.json"))
+            paths.append(os.path.join("blog", "feed.json"))
+            for loc in LOCALES:
+                loc_blog_dir = os.path.join(LANDING_DIR, loc, "blog")
+                _rebuild_blog_feed_from_index(os.path.join(loc_blog_dir, "index.html"), os.path.join(loc_blog_dir, "feed.json"))
+                paths.append(os.path.join(loc, "blog", "feed.json"))
+        except Exception as e:
+            log_event(DB_PATH, job_id, "WARN", f"Combined feed refresh failed: {e}")
+
     # Run global image optimization only for regular blog posts.
     # For SEO country/region pages this is very expensive and not required per publish.
     if not is_section_page:
@@ -4215,7 +4443,7 @@ def unpublish(job_id: str):
         remove_sitemap_url(SITEMAP_PATH, url=url)
 
         for loc in LOCALES:
-            loc_abs = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
+            loc_abs = os.path.join(root, loc, section, slug, "index.html")
             loc_rel = os.path.join(loc, section, slug, "index.html")
             loc_url = _section_url(section, slug, loc)
             if os.path.exists(loc_abs):
@@ -4301,7 +4529,7 @@ def delete_job(job_id: str):
             remove_sitemap_url(SITEMAP_PATH, url=url)
 
             for loc in LOCALES:
-                loc_abs = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
+                loc_abs = os.path.join(root, loc, section, slug, "index.html")
                 loc_rel = os.path.join(loc, section, slug, "index.html")
                 loc_url = _section_url(section, slug, loc)
 
