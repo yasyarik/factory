@@ -4059,6 +4059,7 @@ def publish(job_id: str):
         "de": "Auf dieser Seite",
         "fr": "Sur cette page",
     }
+    locale_retry_attempts = max(1, min(3, int(os.environ.get("LOCALE_PUBLISH_RETRY_ATTEMPTS", "2") or "2")))
     for loc in LOCALES:
         _ensure_sitemap(_locale_sitemap_path(loc))
         loc_sitemap = _locale_sitemap_path(loc)
@@ -4084,21 +4085,10 @@ def publish(job_id: str):
         loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=cat, content_html=loc_content), loc)
 
         if text_api_key:
-            try:
-                tr = _translate_post_payload(
-                    api_key=text_api_key,
-                    model=text_model,
-                    locale=loc,
-                    slug=slug,
-                    title=loc_title,
-                    description=loc_desc,
-                    category=loc_cat,
-                    content_html=loc_content,
-                    faq=loc_faq,
-                )
-            except Exception as tr_err:
-                if _is_gemini_runtime_error(tr_err) and _switch_gemini_to_backup(str(tr_err), job_id=job_id):
-                    text_api_key = _active_gemini_api_key()
+            tr = None
+            tr_error = None
+            for attempt in range(1, locale_retry_attempts + 1):
+                try:
                     tr = _translate_post_payload(
                         api_key=text_api_key,
                         model=text_model,
@@ -4110,9 +4100,31 @@ def publish(job_id: str):
                         content_html=loc_content,
                         faq=loc_faq,
                     )
-                    log_event(DB_PATH, job_id, "INFO", f"Localization {loc} recovered with backup Gemini key")
-                else:
+                    if attempt > 1:
+                        log_event(DB_PATH, job_id, "INFO", f"Localization {loc} succeeded on retry {attempt}/{locale_retry_attempts}")
+                    tr_error = None
+                    break
+                except Exception as tr_err:
+                    tr_error = tr_err
+                    switched = False
+                    if _is_gemini_runtime_error(tr_err):
+                        switched = _switch_gemini_to_backup(str(tr_err), job_id=job_id)
+                        if switched:
+                            text_api_key = _active_gemini_api_key()
+                            log_event(DB_PATH, job_id, "INFO", f"Localization {loc}: switched Gemini key after runtime error")
+
+                    if attempt < locale_retry_attempts:
+                        log_event(DB_PATH, job_id, "WARN", f"Localization {loc} attempt {attempt}/{locale_retry_attempts} failed: {tr_err}")
+                        time.sleep(min(2.0, 0.5 * attempt))
+                        continue
+
+                    if switched:
+                        log_event(DB_PATH, job_id, "WARN", f"Localization {loc} failed after key switch: {tr_err}")
                     raise
+
+            if tr is None:
+                raise tr_error or HTTPException(status_code=500, detail=f"Localization {loc} failed")
+
             loc_title = tr["title"]
             loc_desc = tr["description"]
             loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
