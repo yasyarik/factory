@@ -316,7 +316,6 @@ def generate_draft(
 
     user: dict[str, Any] = {
         "topic": topic,
-        "year": 2026,
         "categoryHint": category,
         "heroImageHint": hero_image,
         "sourceHtml": (source_html or "")[:25000],
@@ -349,7 +348,7 @@ def generate_draft(
         return {
             "slug": slug,
             "title": topic,
-            "description": (topic + " - practical guide for 2026 with examples, checklist, and FAQ.")[:160],
+            "description": (topic + " - practical guide with examples, checklist, and FAQ.")[:160],
             "category": category or "Buying Guides",
             "heroImage": os.path.basename(hero_image) if hero_image else "scaling-ai.jpg",
             "contentHtml": (
@@ -371,7 +370,7 @@ def generate_draft(
                 "<p><strong>Yes, if you match the intent and keep it factual.</strong></p>"
                 "<h2>What mistakes should you avoid?</h2>"
                 "<p><strong>Avoid fluff and missing internal links.</strong></p>"
-                "<h2>How to optimize for 2026?</h2>"
+                "<h2>How to optimize the workflow?</h2>"
                 "<p><strong>Use updated examples and add schema.</strong></p>"
                 "<h2>Which tools help?</h2>"
                 "<p><strong>Use AI plus validation and a publish checklist.</strong></p>"
@@ -406,7 +405,7 @@ def generate_draft(
                 api_key,
                 model,
                 RESEARCH_PROMPT,
-                json.dumps({"topic": topic, "year": 2026, "site": _site_origin(), "brand": _brand_name()}),
+                json.dumps({"topic": topic, "site": _site_origin(), "brand": _brand_name()}),
                 use_grounding=True,
             )
             r_obj = _parse_json_strict(r_text)

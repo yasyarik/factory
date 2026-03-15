@@ -2625,11 +2625,11 @@ def _seo_topic_for_entity(entity_type: str, title: str, country: str, region: st
     r = (region or "").strip()
     if et == "country":
         label = c or t
-        topic = f"Create a unique country wine landing page for {label} (2026)"
+        topic = f"Create a unique country wine landing page for {label}"
         category = "Buying Guides"
     elif et == "region":
         label = r or t
-        topic = f"Create a unique regional wine landing page for {label} (2026)"
+        topic = f"Create a unique regional wine landing page for {label}"
         category = "Wine Regions"
     else:
         label = t or c or r or "wine"

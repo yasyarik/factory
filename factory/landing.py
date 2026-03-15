@@ -307,9 +307,7 @@ def render_post_html(
     if len(meta_title) > 60:
         meta_title = meta_title[:60].rsplit(" ", 1)[0].rstrip("-:|,")
     if len(meta_title) < 55:
-        if len(meta_title) + len(" (2026)") <= 60:
-            meta_title = meta_title + " (2026)"
-        if len(meta_title) < 55:
+                if len(meta_title) < 55:
             meta_title = (meta_title + " - Complete Guide")[:60].rstrip("-:|,")
 
     meta_desc = re.sub(r"\s+", " ", (description or "").strip())
