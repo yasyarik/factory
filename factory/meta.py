@@ -58,7 +58,7 @@ def fit_meta_description(desc: str | None, *, fallback: str | None = None) -> st
         s = _collapse_ws(_strip_tags(fallback or ""))
 
     if not s:
-        s = "Practical 2026 guide covering regions, grapes, producers, and food pairings with clear recommendations for tasting and buying."
+        s = "Practical guide covering regions, grapes, producers, and food pairings with clear recommendations for tasting and buying."
 
     MIN_LEN = 145
     MAX_LEN = 158

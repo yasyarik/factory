@@ -2331,7 +2331,7 @@ def _ensure_min_faq(draft: dict[str, Any], topic: str | None = None, min_items: 
             break
         if q in used:
             continue
-        a = f"Short answer: {short} Focus on practical execution, measurable KPIs, and consistent iteration in 2026."
+        a = f"Short answer: {short} Focus on practical execution, measurable KPIs, and consistent iteration."
         cleaned.append({"question": q, "answer": a})
         used.add(q)
 
