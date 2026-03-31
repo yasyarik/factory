@@ -103,7 +103,7 @@
         <h3>Top SEO Entities</h3>
         <div class="tbl">
           <table>
-            <thead><tr><th>ID</th><th>Type</th><th>Slug</th><th>Country</th><th>Region</th><th>Main Grape</th><th>Top Winery</th><th>Score</th><th>Status</th></tr></thead>
+            <thead><tr><th>ID</th><th>Type</th><th>Slug</th><th>Country</th><th>Region</th><th>Primary Topic</th><th>Primary Brand</th><th>Score</th><th>Status</th></tr></thead>
             <tbody id="entitiesBody"><tr><td colspan="9">Loading...</td></tr></tbody>
           </table>
         </div>
@@ -148,8 +148,8 @@
             <td>${x.slug ?? ''}</td>
             <td>${x.country ?? ''}</td>
             <td>${x.region ?? ''}</td>
-            <td>${x.grape ?? ''}</td>
-            <td>${x.winery ?? ''}</td>
+            <td>${x.primaryTopic ?? x.topic ?? ''}</td>
+            <td>${x.brand ?? ''}</td>
             <td>${x.score ?? ''}</td>
             <td>${x.status ?? ''}</td>
           </tr>`).join('');

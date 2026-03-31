@@ -1,0 +1,60 @@
+{
+  "name": "MyUGC 30-Day Product-Led Blog Plan",
+  "created_at": "2026-03-19",
+  "rules": {
+    "publish_per_day": 1,
+    "max_per_week": 5,
+    "off_days": ["Thursday", "Sunday"],
+    "publish_days": ["Monday", "Tuesday", "Wednesday", "Friday", "Saturday"],
+    "format": "practical_guide",
+    "word_count": "1200-1800",
+    "required_blocks": ["workflow", "checklist", "use_case", "common_mistakes"],
+    "internal_linking": {
+      "outbound_to_core_same_cluster": 2,
+      "inbound_from_old_core_same_cluster": 2,
+      "cluster_block_scope": "same_cluster_only"
+    },
+    "forbidden": [
+      "best/top/hack/guru roundups",
+      "broad comparison pages without strong intent"
+    ],
+    "localization_mode": "publish in EN first; translate only strongest 5-10 after indexation"
+  },
+  "days": [
+    {"day": 1, "cluster": "Shopify AI UGC", "title": "How to Add UGC Content to Shopify Product Pages", "keyword": "add ugc to shopify", "intent": "how-to", "h2": ["Why UGC Content Improves Shopify Conversion", "Where to Place UGC on Product Pages", "Step-by-Step: Adding UGC Without Apps", "Step-by-Step: Using Apps or AI Tools", "UGC Placement Checklist", "Common Mistakes"]},
+    {"day": 2, "cluster": "Product Image to Video", "title": "How to Turn Product Images into TikTok Ads", "keyword": "product images to tiktok ads", "intent": "how-to", "h2": ["Why Static Images Fail on TikTok", "What Makes a Good TikTok Product Creative", "Step-by-Step Image to Video Workflow", "Hook Examples", "Export & Testing", "Mistakes"]},
+    {"day": 3, "cluster": "Dropshipping Product Photos", "title": "How to Improve Dropshipping Product Pages Without a Photoshoot", "keyword": "improve product page without photoshoot", "intent": "problem-solving", "h2": ["Why Supplier Images Kill Conversion", "What a Good Product Page Looks Like", "Replacing Images Without Shooting", "Visual Upgrade Checklist", "Before / After Logic"]},
+    {"day": 4, "cluster": "TikTok / UGC Ads", "title": "TikTok UGC Hooks for Ecommerce Products", "keyword": "tiktok ugc hooks", "intent": "examples", "h2": ["What Makes a Hook Work", "10 Hook Templates", "Hooks by Product Type", "Bad Hooks Examples", "Testing Hooks"]},
+    {"day": 5, "cluster": "Amazon / Marketplace Listing Images", "title": "Amazon Product Images vs Lifestyle Images", "keyword": "amazon product images vs lifestyle", "intent": "comparison", "h2": ["What Amazon Requires", "When to Use Product vs Lifestyle", "Conversion Impact", "Best Structure for Listings", "Mistakes"]},
+
+    {"day": 6, "cluster": "Shopify AI UGC", "title": "Shopify Product Page UGC Examples That Increase Add-to-Cart", "keyword": "ugc examples shopify", "intent": "examples", "h2": ["What Good UGC Looks Like", "Real Page Layout Examples", "Image vs Video UGC", "Placement Strategy", "Why They Work"]},
+    {"day": 7, "cluster": "Product Image to Video", "title": "Static Product Images vs Product Videos for Ecommerce", "keyword": "product images vs video ecommerce", "intent": "comparison", "h2": ["Performance Difference", "When Images Still Work", "When Video Wins", "Cost vs Output", "Recommendation"]},
+    {"day": 8, "cluster": "Dropshipping Product Photos", "title": "Dropshipping Product Images That Look Branded, Not Generic", "keyword": "dropshipping product images", "intent": "how-to", "h2": ["Why Generic Images Fail", "Elements of Branded Content", "How to Upgrade Supplier Photos", "Visual Checklist"]},
+    {"day": 9, "cluster": "TikTok / UGC Ads", "title": "How to Create Scroll-Stopping Product Creatives for TikTok", "keyword": "scroll stopping ads", "intent": "how-to", "h2": ["What Stops Scroll", "Visual Patterns", "Timing & Cuts", "Hook Strategy", "Testing"]},
+    {"day": 10, "cluster": "Localization / Global Creatives", "title": "How to Localize Product Creatives for Different Countries", "keyword": "localize ecommerce creatives", "intent": "how-to", "h2": ["Why Localization Matters", "What Changes Between Markets", "Visual Differences", "Workflow", "Mistakes"]},
+
+    {"day": 11, "cluster": "Shopify AI UGC", "title": "UGC vs Product Photography for Shopify Brands", "keyword": "ugc vs product photography", "intent": "comparison", "h2": ["Cost Comparison", "Speed Comparison", "Conversion Impact", "When to Use Each", "Hybrid Strategy"]},
+    {"day": 12, "cluster": "Product Image to Video", "title": "Best Video Formats for PDP, TikTok, and Reels", "keyword": "ecommerce video formats", "intent": "guide", "h2": ["PDP Video Formats", "TikTok Formats", "Reels Formats", "Duration & Structure", "Checklist"]},
+    {"day": 13, "cluster": "Dropshipping Product Photos", "title": "Common Product Visual Mistakes That Hurt Dropshipping Conversion", "keyword": "product image mistakes", "intent": "problem", "h2": ["Most Common Mistakes", "Why They Kill Conversion", "Fixes", "Quick Audit Checklist"]},
+    {"day": 14, "cluster": "TikTok / UGC Ads", "title": "Why Most UGC Ads Fail Before the First Click", "keyword": "ugc ads fail", "intent": "problem", "h2": ["Wrong Hook", "Weak Visual", "No Context", "Fix Framework"]},
+    {"day": 15, "cluster": "Amazon / Marketplace Listing Images", "title": "How to Improve Amazon Listing Visuals Without a Studio", "keyword": "amazon images without photoshoot", "intent": "how-to", "h2": ["Requirements", "What to Replace", "AI Workflow", "Listing Structure"]},
+
+    {"day": 16, "cluster": "Shopify AI UGC", "title": "How to Test UGC Creatives on Shopify Product Pages", "keyword": "test ugc shopify", "intent": "how-to", "h2": ["What to Test", "Metrics", "A/B Setup", "Scaling"]},
+    {"day": 17, "cluster": "Product Image to Video", "title": "How to Generate Product Videos for Dropshipping Stores", "keyword": "generate product videos dropshipping", "intent": "how-to", "h2": ["Workflow", "Tools", "Templates", "Output"]},
+    {"day": 18, "cluster": "Dropshipping Product Photos", "title": "How to Launch a Dropshipping Product With Only Supplier Photos", "keyword": "launch product without content", "intent": "how-to", "h2": ["Problem", "Strategy", "Upgrade Process", "Checklist"]},
+    {"day": 19, "cluster": "TikTok / UGC Ads", "title": "TikTok Creative Testing Workflow for Ecommerce Brands", "keyword": "tiktok ad testing workflow", "intent": "how-to", "h2": ["Testing Setup", "Variables", "Iteration Loop", "Scaling"]},
+    {"day": 20, "cluster": "Localization / Global Creatives", "title": "Why Localized Visuals Improve Ecommerce Performance", "keyword": "localization conversion ecommerce", "intent": "explanation", "h2": ["Cultural Fit", "Examples", "Conversion Impact", "Implementation"]},
+
+    {"day": 21, "cluster": "Shopify AI UGC", "title": "UGC Content Checklist Before Launching a Shopify Product", "keyword": "ugc checklist ecommerce", "intent": "checklist", "h2": ["Visual Checklist", "Video Checklist", "Placement Checklist", "Pre-launch Audit"]},
+    {"day": 22, "cluster": "Product Image to Video", "title": "Product Image to Video Workflow for Ecommerce Teams", "keyword": "image to video workflow ecommerce", "intent": "workflow", "h2": ["Input", "Processing", "Output", "Scaling"]},
+    {"day": 23, "cluster": "Dropshipping Product Photos", "title": "Cheap Ways to Create Better Product Content for Dropshipping", "keyword": "cheap product content", "intent": "how-to", "h2": ["Budget Options", "AI Options", "DIY Methods", "Trade-offs"]},
+    {"day": 24, "cluster": "TikTok / UGC Ads", "title": "Product Demonstration Formats That Work in Short-Form Ads", "keyword": "product demo formats", "intent": "examples", "h2": ["Demo Types", "Best Use Cases", "Structure", "Mistakes"]},
+    {"day": 25, "cluster": "Amazon / Marketplace Listing Images", "title": "Common Amazon Image Mistakes That Reduce Listing Quality", "keyword": "amazon image mistakes", "intent": "problem", "h2": ["Violations", "Weak Visuals", "Fixes", "Checklist"]},
+
+    {"day": 26, "cluster": "Shopify AI UGC", "title": "How Small Shopify Brands Scale Creative Production Without Creators", "keyword": "scale ugc without creators", "intent": "strategy", "h2": ["Problem", "System", "Workflow", "Tools"]},
+    {"day": 27, "cluster": "Product Image to Video", "title": "Common Mistakes in AI Product Videos", "keyword": "ai product video mistakes", "intent": "problem", "h2": ["Unrealistic visuals", "Wrong pacing", "Bad hooks", "Fixes"]},
+    {"day": 28, "cluster": "Dropshipping Product Photos", "title": "Why Most Dropshipping Stores Fail Visually", "keyword": "dropshipping visual mistakes", "intent": "explanation", "h2": ["Generic content", "No branding", "Weak creatives", "Fix"]},
+    {"day": 29, "cluster": "Amazon / Marketplace Listing Images", "title": "Secondary Listing Images for Amazon: What to Show", "keyword": "amazon secondary images", "intent": "guide", "h2": ["Image types", "Order", "Content", "Mistakes"]},
+    {"day": 30, "cluster": "Localization / Global Creatives", "title": "Global Creative Workflow for Multi-Market Ecommerce Brands", "keyword": "global creative workflow", "intent": "strategy", "h2": ["Structure", "Localization", "Scaling", "Tools"]}
+  ]
+}

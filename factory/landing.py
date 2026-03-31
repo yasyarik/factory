@@ -307,8 +307,7 @@ def render_post_html(
     if len(meta_title) > 60:
         meta_title = meta_title[:60].rsplit(" ", 1)[0].rstrip("-:|,")
     if len(meta_title) < 55:
-                if len(meta_title) < 55:
-            meta_title = (meta_title + " - Complete Guide")[:60].rstrip("-:|,")
+        meta_title = (meta_title + " - Complete Guide")[:60].rstrip("-:|,")
 
     meta_desc = re.sub(r"\s+", " ", (description or "").strip())
     if len(meta_desc) > 160:
@@ -424,6 +423,9 @@ def render_post_html(
 
     head_inject = [
         f'<link rel="canonical" href="{url}">',
+        '<!-- Google tag (gtag.js) -->',
+        '<script async src="https://www.googletagmanager.com/gtag/js?id=G-53E9SMT5E8"></script>',
+        "<script>window.dataLayer = window.dataLayer || []; function gtag(){dataLayer.push(arguments);} gtag('js', new Date()); gtag('config', 'G-53E9SMT5E8');</script>",
         '<meta name="twitter:card" content="summary_large_image">',
         f'<meta name="twitter:title" content="{_html_escape(title)}">',
         f'<meta name="twitter:description" content="{_html_escape(meta_desc)}">',
@@ -482,6 +484,43 @@ def render_post_html(
 
 
 
+
+
+
+_EXCERPT_BROKEN_RE = re.compile(
+    r"\b(?:An\s+to|A\s+Investor(?:'|’)s|for:|our\s+ensures|with\s+this\s+\.|An\s+\.\.|Your\s+to|\s-\sCom\.|\|\s*My\s*UGC\s*Studio|Practical\s+ecommerce\s+guides:)\b",
+    flags=re.IGNORECASE,
+)
+
+_EXCERPT_FALLBACK_BY_CATEGORY = {
+    'TikTok / Short-Form UGC Ads': 'Answer-first guidance for hooks, shot structure, CTA pacing, and what to avoid in short-form ads.',
+    'Marketplace Listing Images': 'Listing-focused guidance for hero/secondary image sequencing with practical next steps and quality checks.',
+    'Localization / Global Creatives': 'Market-first guidance for adapting visuals, copy, and context to local expectations without losing brand consistency.',
+    'Product Image to Video': 'Workflow-first guidance for turning product images into short-form video variants for paid and organic placements.',
+    'Shopify AI UGC': 'Decision-focused frameworks for Shopify creative production, QA, and deployment with practical checklists and tradeoffs.',
+}
+
+def _sanitize_excerpt(text: str) -> str:
+    t = _html_unescape_deep(text).strip()
+    t = re.sub(r"\s+", " ", t)
+    t = re.sub(r"\s*[:\-–—]\s*answer[\w-]*\s*\.*\s*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bansw[\w-]*\b", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\|\s*My\s*UGC\s*Studio.*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"Practical\s+ecommerce\s+guides?:.*$", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s+", " ", t).strip(" \t\r\n-:;,.…")
+    return t
+
+
+def _card_excerpt_with_fallback(description: str, category: str) -> str:
+    excerpt = _sanitize_excerpt(description).strip()
+    if len(excerpt) > 120:
+        excerpt = excerpt[:117].rstrip() + "..."
+    if (not excerpt) or len(excerpt) < 90 or _EXCERPT_BROKEN_RE.search(excerpt):
+        return _EXCERPT_FALLBACK_BY_CATEGORY.get(
+            _html_unescape_deep(category).strip(),
+            'Read the full guide to learn practical ecommerce creative workflows and publishing steps.'
+        )
+    return excerpt
 
 def _normalize_blog_index_seo(src: str, href_prefix: str = "/blog") -> str:
     origin = _site_origin()
@@ -548,10 +587,7 @@ def upsert_blog_index_card(
 
     title = _html_unescape_deep(title).strip()
     category = _html_unescape_deep(category).strip()
-    description = _html_unescape_deep(description).strip()
-    excerpt = description.strip()
-    if len(excerpt) > 170:
-        excerpt = excerpt[:167].rstrip() + "..."
+    excerpt = _card_excerpt_with_fallback(description, category)
 
     card = (
         f'\n            <!-- {marker_prefix}:{slug} -->\n'

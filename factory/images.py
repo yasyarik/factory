@@ -217,15 +217,57 @@ def _country_hint_from_text(topic: str, title: str, category: str = "") -> str:
     return ""
 
 
-def _country_visual_hint(topic: str, title: str, category: str = "") -> str:
+def _region_hint_from_text(topic: str, title: str, category: str = "", slug: str = "") -> tuple[str, str]:
+    text = f"{topic} {title} {category} {slug}".strip()
+
+    # Extract region from SEO topic patterns:
+    # "Create a unique regional ecommerce landing page for <Region> (2026)"
+    m = re.search(r"regional ecommerce landing page for\s+(.+?)\s*\(\d{4}\)", text, flags=re.IGNORECASE)
+    region = (m.group(1).strip() if m else "")
+
     country = _country_hint_from_text(topic, title, category)
-    if not country:
-        return ""
-    return (
-        f"Country identity: {country}. Include subtle, realistic regional cues relevant to {country} "
-        "(landscape, vineyard architecture, terroir textures, table setting, climate mood), "
-        "while staying photorealistic and documentary-style. "
-    )
+
+    if not region and slug:
+        base = slug.replace('topic-cluster-', '').strip('-')
+        parts = [x for x in base.split('-') if x]
+        if len(parts) >= 2:
+            maybe_country = parts[-1]
+            region = ' '.join(parts[:-1]).replace('-', ' ').title()
+            if not country and maybe_country:
+                country = maybe_country.replace('-', ' ').title()
+
+    # Clean trailing country name in region label if model repeated it
+    if region and country:
+        low_r = region.lower().strip(' ,')
+        low_c = country.lower().strip(' ,')
+        if low_r.endswith(', ' + low_c):
+            region = region[:-(len(country)+2)].strip(' ,')
+        elif low_r.endswith(' ' + low_c):
+            region = region[:-(len(country)+1)].strip(' ,')
+
+    return region, country
+
+
+def _location_visual_hint(topic: str, title: str, category: str = "", slug: str = "") -> str:
+    region, country = _region_hint_from_text(topic, title, category, slug)
+
+    is_region_page = (category or '').strip().lower() in ('localization / global creatives','marketplace listing images')
+    if is_region_page and region:
+        where = f"{region}, {country}" if country else region
+        return (
+            f"Regional identity: {where}. Include subtle, realistic cues specific to this region "
+            "(product context, placement cues, visual hierarchy, and channel-native composition), "
+            "while staying photorealistic and documentary-style. "
+        )
+
+    if country:
+        return (
+            f"Country identity: {country}. Include subtle, realistic regional cues relevant to {country} "
+            "(product context, placement cues, visual hierarchy, and channel-native composition), "
+            "while staying photorealistic and documentary-style. "
+        )
+
+    return ""
 
 def ensure_hero_and_inline_images(
     *,
@@ -273,8 +315,8 @@ def ensure_hero_and_inline_images(
                 "Style: modern, cinematic lighting, natural texture, photographic grain, high-detail gradients, UGC-advertising vibe, no text, no logos, no watermarks, no illustration, no vector, no posterized look. Fill the entire frame edge-to-edge; no borders, no frames, no letterboxing, no pillarboxing, no padding, no margins, no blank strips. "
                 "Aspect ratio: 1:1 (square). "
                 f"Topic: {topic}. Title: {title}. Category: {category}. "
-                + _country_visual_hint(topic, title, category)
-                + "Avoid generic wine clipart look; prefer authentic place-specific visual storytelling."
+                + _location_visual_hint(topic, title, category, slug)
+                + "Avoid generic stock clipart look; prefer authentic ecommerce product storytelling."
             )
             last_err = None
             for gen_attempt in range(1, 5):
@@ -351,8 +393,8 @@ def ensure_hero_and_inline_images(
             "Style: modern, cinematic lighting, natural texture, photographic grain, high-detail gradients, no text, no logos, no watermarks, no illustration, no vector, no posterized look. "
             "Aspect ratio: 1:1 (square). "
             f"Context topic: {topic}. "
-            + _country_visual_hint(topic, title, category)
-            + "Avoid generic wine clipart look; keep scene grounded in real place context. "
+            + _location_visual_hint(topic, title, category, slug)
+            + "Avoid generic stock clipart look; keep scene grounded in real ecommerce context. "
             + (f"Image description: {alt}." if alt else "")
         )
 

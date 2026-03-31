@@ -1,9 +1,9 @@
 import sqlite3, secrets, re, json, urllib.request, urllib.error, time
 from datetime import datetime, timezone
 
-DB='/var/www/content-factory-yaswine/factory.sqlite'
+DB='/var/www/content-factory/factory.sqlite'
 BASE='http://127.0.0.1:3199'
-LOG='/var/www/content-factory-yaswine/country_batch.log'
+LOG='/var/www/content-factory/country_batch.log'
 
 countries = [
     'france','italy','spain','united states','argentina','chile','australia','portugal','germany','south africa',
@@ -74,7 +74,7 @@ for key in countries:
     else:
       job_id = secrets.token_hex(12)
       t = (ent['title'] or f"Wine in {ent['entity_key'].title()}").strip()
-      slug = (ent['slug'] or '').strip() or f"wine-country-{slugify(ent['entity_key'])}"
+      slug = (ent['slug'] or '').strip() or f"topic-cluster-{slugify(ent['entity_key'])}"
       ts = now()
       cur.execute("""
         INSERT INTO jobs (id, topic, slug, status, category, visibility, product_mode, engagement_mode, lead_magnet_mode, created_at, updated_at)

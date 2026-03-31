@@ -29,10 +29,10 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
     if not title:
         problems.append("missing title")
 
-    # Meta requirement: description 145-158 chars.
+    # Meta requirement: description 145-160 chars.
     desc_len = len(desc) if desc else 0
-    if not desc or desc_len < 145 or desc_len > 158:
-        problems.append(f"description length must be 145-158 chars (got {desc_len})")
+    if not desc or desc_len < 145 or desc_len > 160:
+        problems.append(f"description length must be 145-160 chars (got {desc_len})")
 
     if not slug:
         problems.append("missing slug")
@@ -46,35 +46,27 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
         problems.append("missing lead paragraph before first H2")
     else:
         if not re.match(r"<strong>\s*.+?</strong>", lead.lstrip(), flags=re.IGNORECASE | re.DOTALL):
-            problems.append("lead paragraph must start with <strong>answer</strong>")
+            problems.append("lead paragraph must start with a direct <strong> statement")
 
     h2 = _count(r"<h2\b", html)
-    if h2 < 8 or h2 > 12:
-        problems.append(f"expected 8-12 H2, got {h2}")
+    if h2 < 6 or h2 > 9:
+        problems.append(f"expected 6-9 H2, got {h2}")
 
     h3 = _count(r"<h3\b", html)
-    if h3 < 20 or h3 > 40:
-        problems.append(f"expected 20-40 H3, got {h3}")
+    if h3 > 16:
+        problems.append(f"too many H3 sections (max 16, got {h3})")
 
     h2_texts = re.findall(r"<h2[^>]*>(.*?)</h2>", html, flags=re.IGNORECASE | re.DOTALL)
-    if h2_texts:
-        q = 0
-        for t in h2_texts:
-            if _strip_tags(t).endswith("?"):
-                q += 1
-        if q / max(1, len(h2_texts)) < 0.5:
-            problems.append("at least 50% of H2 should be questions")
+    # Question-style H2 is optional: no hard failure here.
 
     if _count(r"<table\b", html) < 1:
         problems.append("missing <table>")
     if _count(r"<ol\b", html) < 1:
         problems.append("missing step-by-step ordered list (<ol>)")
-    if _count(r"<blockquote\b", html) < 1:
-        problems.append("missing expert quote (<blockquote>)")
 
     img_tags = re.findall(r"<img\b([^>]*)>", html, flags=re.IGNORECASE)
-    if len(img_tags) < 3:
-        problems.append("missing images (need >= 3 <img>)")
+    if len(img_tags) < 2 or len(img_tags) > 3:
+        problems.append(f"images must be 2-3 (got {len(img_tags)})")
     else:
         for attrs in img_tags:
             m = re.search(r"\balt=\"(.*?)\"", attrs, flags=re.IGNORECASE | re.DOTALL)
@@ -87,38 +79,50 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
     if len(internal) < 5:
         problems.append("need at least 5 internal links to /blog/")
 
-    if not isinstance(faq, list) or len(faq) < 5:
-        problems.append("missing faq array (need >= 5 Q/A)")
+    if not isinstance(faq, list) or len(faq) < 5 or len(faq) > 7:
+        problems.append("faq must contain 5-7 items")
 
-    # wine tenant guardrail: reject cross-tenant technical or ecommerce narratives
+    # myugc guardrail: reject wine/off-topic narratives
     plain = _strip_tags(html).lower()
     forbidden_literals = [
-        "my ugc studio",
-        "shopify",
-        "ugc",
-        "content automation",
-        "ecommerce creative",
-        "ad creatives",
+        "wine",
+        "wineries",
+        "vineyard",
+        "sommelier",
+        "terroir",
+        "grape varieties",
     ]
     for lit in forbidden_literals:
         if lit in plain:
-            problems.append(f"wine-only guardrail: forbidden term {lit}")
+            problems.append(f"myugc guardrail: forbidden term {lit}")
             break
 
-    if re.search(r"hows+tos+build", plain) and re.search(r"(matrix|automation|system|workflow|pipeline|stack)", plain):
-        problems.append("wine-only guardrail: technical build-guide content is not allowed")
+    if re.search(r"how\s+to\s+build\b", plain) and re.search(r"\b(matrix|automation|system|workflow|pipeline|stack)\b", plain):
+        problems.append("myugc guardrail: technical build-guide content is not allowed")
 
-    for tag in ("h2", "h3"):
-        blocks = re.split(r"(<" + tag + r"[^>]*>.*?</" + tag + r">)", html, flags=re.IGNORECASE | re.DOTALL)
-        for i in range(1, len(blocks), 2):
-            after = blocks[i + 1] if i + 1 < len(blocks) else ""
-            m = re.search(r"<p[^>]*>\s*(.*?)</p>", after, flags=re.IGNORECASE | re.DOTALL)
-            if not m:
-                problems.append(f"answer-first: missing paragraph after a {tag.upper()}")
-                break
-            first_p = m.group(1).lstrip()
-            if not re.match(r"<strong>\s*.+?</strong>", first_p, flags=re.IGNORECASE | re.DOTALL):
-                problems.append(f"answer-first: first paragraph after a {tag.upper()} must start with <strong>answer</strong>")
-                break
+    # Ensure each H2 has a following paragraph (answer-first), but do not enforce rigid H3 template.
+    blocks = re.split(r"(<h2[^>]*>.*?</h2>)", html, flags=re.IGNORECASE | re.DOTALL)
+    for i in range(1, len(blocks), 2):
+        after = blocks[i + 1] if i + 1 < len(blocks) else ""
+        m = re.search(r"<p[^>]*>\s*(.*?)</p>", after, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            problems.append("answer-first: missing paragraph after a H2")
+            break
+
+    forbidden_patterns = (
+        "answer:",
+        "reasoning:",
+        "framework:",
+        "decision layer",
+        "execution layer",
+        "scenario deep dive",
+        "progress tracking",
+        "comparison loop",
+        "workflow logic",
+    )
+    for pat in forbidden_patterns:
+        if pat in plain:
+            problems.append(f"forbidden wording in article: {pat}")
+            break
 
     return problems

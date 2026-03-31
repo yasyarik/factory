@@ -27,14 +27,6 @@ GENERIC_DIRECTION_TOKENS = {
     "tips", "ideas", "strategy", "strategies", "workflow", "marketing", "article", "articles"
 }
 
-PLATFORM_DIRECTION_TOKENS = {
-    "shopify", "tiktok", "youtube", "pinterest", "instagram", "facebook", "linkedin", "amazon", "ebay", "etsy"
-}
-
-BUSINESS_DIRECTION_TOKENS = {
-    "ugc", "ecommerce", "dropshipping", "ads", "creative", "creatives", "product", "products", "photos", "images", "videos"
-}
-
 
 def _direction_anchor_tokens(direction: str) -> set[str]:
     return {t for t in _tokens(direction) if len(t) >= 4 and t not in GENERIC_DIRECTION_TOKENS}
@@ -97,14 +89,6 @@ def _clean_candidate_topic(raw_topic: str, direction: str) -> str | None:
         return None
     if "be like" in lo or re.search(r"@\w+", t) or re.search(r"\bpt\s*\d+\b", lo):
         return None
-    if re.search(r"\b(racist|publisher|celebrity|movie|actor|actress|singer|gaming|streamer|drama|gossip|scandal)\b", lo):
-        return None
-    if re.search(r"\b(night in the woods|tunic|doctored|lying)\b", lo):
-        return None
-    if re.match(r"^\s*\d+\s+(of\s+)?(the\s+)?best\b", lo):
-        return None
-    if re.search(r"\bbest\s+\w+\s+(bar|bars|restaurant|restaurants|festival|festivals)\b", lo):
-        return None
 
     # Too many sentence fragments usually means forum rant, not article title.
     if len(re.findall(r"[.!?]", t)) > 2:
@@ -136,21 +120,6 @@ def _clean_candidate_topic(raw_topic: str, direction: str) -> str | None:
 
     anchors = _direction_anchor_tokens(direction)
     if anchors and not (anchors & tt):
-        return None
-
-    # Enforce stronger direction relevance for platform/business intents.
-    dlow = (direction or "").lower()
-    platform_in_direction = {tok for tok in PLATFORM_DIRECTION_TOKENS if tok in dlow}
-    if platform_in_direction and not (platform_in_direction & tt):
-        return None
-
-    business_in_direction = {tok for tok in BUSINESS_DIRECTION_TOKENS if tok in dlow}
-    if business_in_direction and not (business_in_direction & tt):
-        return None
-
-    # For long directions, require at least 2 overlaps with meaningful tokens.
-    meaningful = {tok for tok in dt if tok not in GENERIC_DIRECTION_TOKENS and tok not in {"in", "for", "and", "the"}}
-    if len(meaningful) >= 4 and len(meaningful & tt) < 2:
         return None
 
     return t
@@ -202,15 +171,17 @@ def _infer_discovery_category(topic: str, category_hint: str | None = None) -> s
     h = (category_hint or "").lower()
     src = f"{t} {h}"
 
-    if re.search(r"(winery|wineries|vineyard|travel|route|tour|bodega|viaje|weingut|reisen|винодель|путешеств)", src):
-        return "Wineries & Travel"
-    if re.search(r"(region|terroir|appellation|map|rioja|tuscany|bordeaux|регион|терруар)", src):
-        return "Wine Regions"
-    if re.search(r"(grape|variet|viticulture|uva|uvas|cépage|cepage|rebsorte|виноград|сорт)", src):
-        return "Grape Varieties"
-    if re.search(r"(pair|pairing|food|dish|meal|maridaje|comida|accord|еда|блюд|сочет)", src):
-        return "Food Pairing"
-    return "Buying Guides"
+    if re.search(r"(shopify|ugc|creative workflow|content ops|pdp|product page)", src):
+        return "Shopify AI UGC"
+    if re.search(r"(tiktok|reels|shorts|hook|video creative|ugc ad)", src):
+        return "TikTok / Short-Form UGC Ads"
+    if re.search(r"(amazon|ebay|marketplace|listing|catalog)", src):
+        return "Marketplace Listing Images"
+    if re.search(r"(image to video|video from image|motion creative|video workflow)", src):
+        return "Product Image to Video"
+    if re.search(r"(localiz|global|language|country|market adaptation|regional creative)", src):
+        return "Localization / Global Creatives"
+    return "Shopify AI UGC"
 
 
 def _infer_intent(topic: str) -> str:
@@ -297,24 +268,7 @@ def _fetch_reddit(direction: str, limit: int = 80) -> list[dict[str, Any]]:
 
 
 
-def _normalize_source_sites(source_sites: list[str] | None) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for raw in (source_sites or []):
-        s = (raw or "").strip().lower()
-        s = re.sub(r"^https?://", "", s)
-        s = s.split("/", 1)[0].strip()
-        if not s or "." not in s:
-            continue
-        if s in seen:
-            continue
-        seen.add(s)
-        out.append(s)
-    return out[:20]
-
-
-def _fetch_google_suggest(direction: str, limit: int = 80, source_sites: list[str] | None = None) -> list[dict[str, Any]]:
-    source_sites = _normalize_source_sites(source_sites)
+def _fetch_google_suggest(direction: str, limit: int = 80) -> list[dict[str, Any]]:
     queries = [
         direction,
         f"how to {direction}",
@@ -322,12 +276,6 @@ def _fetch_google_suggest(direction: str, limit: int = 80, source_sites: list[st
         f"why {direction}",
         f"what is {direction}",
     ]
-    for d in source_sites:
-        queries.extend([
-            f"site:{d} {direction}",
-            f"site:{d} best {direction}",
-            f"site:{d} how to {direction}",
-        ])
 
     out: list[dict[str, Any]] = []
     for q in queries:
@@ -360,53 +308,47 @@ def _fetch_google_suggest(direction: str, limit: int = 80, source_sites: list[st
 
 
 
-def _fetch_duckduckgo(direction: str, limit: int = 50, source_sites: list[str] | None = None) -> list[dict[str, Any]]:
-    source_sites = _normalize_source_sites(source_sites)
+def _fetch_duckduckgo(direction: str, limit: int = 50) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
-    queries = [direction]
-    for d in source_sites:
-        queries.append(f"site:{d} {direction}")
+    try:
+        url = "https://duckduckgo.com/ac/?q=" + urllib.parse.quote(direction) + "&type=list"
+        data = _http_get_json(url)
+    except Exception:
+        data = []
 
-    for q in queries[:8]:
-        try:
-            url = "https://duckduckgo.com/ac/?q=" + urllib.parse.quote(q) + "&type=list"
-            data = _http_get_json(url)
-        except Exception:
-            data = []
-        items = data if isinstance(data, list) else []
-        for it in items[:25]:
-            raw_phrase=it.get("phrase") if isinstance(it, dict) else str(it or "")
-            raw_phrase = re.sub(r'^[\[\]\(\)"\'`]+|[\[\]\(\)"\'`]+$', '', raw_phrase).strip()
-            phrase = _to_topic_phrase(raw_phrase)
-            if len(phrase) < 12:
-                continue
-            out.append(
-                {
-                    "question": phrase,
-                    "source": {
-                        "title": "DuckDuckGo suggest",
-                        "url": "https://duckduckgo.com/?q=" + urllib.parse.quote(phrase),
-                    },
-                    "engagement": 3,
-                    "fresh": 0.8,
-                    "origin": "duckduckgo",
-                }
-            )
+    items = data if isinstance(data, list) else []
+    for it in items[:25]:
+        raw_phrase=it.get("phrase") if isinstance(it, dict) else str(it or "")
+        raw_phrase = re.sub(r'^[\[\]\(\)"\'`]+|[\[\]\(\)"\'`]+$', '', raw_phrase).strip()
+        phrase = _to_topic_phrase(raw_phrase)
+        if len(phrase) < 12:
+            continue
+        out.append(
+            {
+                "question": phrase,
+                "source": {
+                    "title": "DuckDuckGo suggest",
+                    "url": "https://duckduckgo.com/?q=" + urllib.parse.quote(phrase),
+                },
+                "engagement": 3,
+                "fresh": 0.8,
+                "origin": "duckduckgo",
+            }
+        )
 
     return out[:limit]
 
 
 
-def discover_topics(*, direction: str, limit: int = 20, category_hint: str | None = None, source_sites: list[str] | None = None) -> dict[str, Any]:
+def discover_topics(*, direction: str, limit: int = 20, category_hint: str | None = None) -> dict[str, Any]:
     direction = _norm_space(direction)
     if len(direction) < 3:
         raise ValueError("direction must be at least 3 characters")
-    source_sites = _normalize_source_sites(source_sites)
 
     raw: list[dict[str, Any]] = []
     raw.extend(_fetch_reddit(direction))
-    raw.extend(_fetch_google_suggest(direction, source_sites=source_sites))
-    raw.extend(_fetch_duckduckgo(direction, source_sites=source_sites))
+    raw.extend(_fetch_google_suggest(direction))
+    raw.extend(_fetch_duckduckgo(direction))
 
     if not raw:
         return {
@@ -551,14 +493,14 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
     if len(items) < cap:
         base = _normalize_topic_case(_to_topic_phrase(direction))
         variants = [
-            f"{base}: best routes and wineries",
-            f"How to plan a {base} weekend?",
-            f"{base} budget breakdown",
+            f"{base}: best city and region opportunities in 2026",
+            f"How to plan a {base} weekend in 2026?",
+            f"{base} budget breakdown for 2026",
             f"{base} seasonal calendar: when to go",
             f"{base} itinerary mistakes to avoid",
             f"{base} tasting checklist for beginners",
             f"{base} transport and logistics guide",
-            f"{base} with food pairing stops: practical plan",
+            f"{base} with placement and creative test checkpoints: practical plan",
             f"{base} 3-day vs 7-day route comparison",
             f"{base} family-friendly route options",
             f"{base} hidden gems and local producers",
@@ -601,7 +543,6 @@ def discover_topics(*, direction: str, limit: int = 20, category_hint: str | Non
             "rawCount": len(raw),
             "uniqueCount": len(scored),
             "sources": seen_sources[:10],
-            "sourceSites": source_sites,
             "generatedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         },
     }
