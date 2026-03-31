@@ -1281,9 +1281,24 @@
         opts = opts || {};
         if (!('credentials' in opts)) opts.credentials = 'same-origin';
         var res = await fetch(resolveUrl(path), opts);
+        var ct = String((res.headers && res.headers.get && res.headers.get('content-type')) || '').toLowerCase();
+        var txt = '';
+        try { txt = await res.text(); } catch (e) { txt = ''; }
+
         var data = {};
-        try { data = await res.json(); } catch (e) { data = {}; }
+        if (txt) {
+          try {
+            data = JSON.parse(txt);
+          } catch (e) {
+            if (ct.indexOf('application/json') === -1) {
+              throw new Error('Session/auth response received instead of API JSON. Reload page and sign in again.');
+            }
+            throw new Error('Invalid JSON response from API');
+          }
+        }
+
         if (!res.ok) throw new Error((data && (data.detail || data.error)) || ('Request failed (' + res.status + ')'));
+        if (data && data.success === false) throw new Error((data.detail || data.error) || 'Request failed');
         return data;
       }
 
@@ -1377,7 +1392,10 @@
 
       async function refresh() {
         var data = await api('/api/jobs');
-        _allJobs = (data && data.jobs) ? data.jobs : [];
+        if (!data || !Array.isArray(data.jobs)) {
+          throw new Error('Invalid jobs payload');
+        }
+        _allJobs = data.jobs;
         renderJobs();
       }
 
