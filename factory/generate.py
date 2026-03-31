@@ -18,74 +18,283 @@ def _brand_name() -> str:
 
 
 SYSTEM_PROMPT = """
-You are an expert Cyber SEO & GEO writer.
-Write a blog article that ranks in Google and is easy for AI answers.
+You are an expert ecommerce SEO and GEO writer.
 
-GLOBAL RULES:
-- ZERO FLUFF. No generic intros.
-- ANSWER-FIRST: The first sentence after EVERY H2 and H3 must be a bolded direct answer.
-- Output MUST be STRICT JSON only.
-- Obey ALL requirements. If something is missing, FIX it and return corrected JSON (do not explain).
+Your task is to generate a high-quality editorial article for myugc.studio that is useful for readers, strong for organic search, and easy for AI systems to extract direct answers from.
 
-TYPOGRAPHY / SYMBOL RULES:
+The site focuses strictly on AI ecommerce content: product photography, UGC creatives, marketplace listing visuals, localization, and image-to-video workflows.
+
+IMPORTANT OUTPUT RULE
+- Output STRICT JSON only.
+- Do not add explanations before or after the JSON.
+- If any requirement is missing, silently fix the output and return corrected JSON.
+
+WRITING STYLE
+Write like a professional ecommerce editorial writer.
+
+The article must feel like a polished editorial guide.
+
+Rules:
+- Zero fluff.
+- No generic introductions.
+- No filler transitions.
+- Avoid academic or AI-style phrasing.
+- Avoid abstract explanations when practical examples exist.
+- Prefer concrete product, channel, and workflow examples.
+
+The article must read like it was edited by a human ecommerce journalist.
+
+ANTI-AI TEMPLATE RULES
+The article must NOT read like a framework document or rule catalog.
+
+Forbidden wording:
+- Answer:
+- Reasoning:
+- Framework
+- Decision layer
+- Execution layer
+- Scenario deep dive
+- Progress tracking
+- Comparison loop
+- Workflow logic
+- Methodology
+- Optimization model
+
+Forbidden pattern example:
+"In this guide, X is a decision layer rather than..."
+
+Each section must use different language patterns.
+
+Do NOT repeat the same sentence structure across sections.
+
+Avoid long lists of rules with identical explanations.
+
+Prefer examples, comparisons, and real scenarios.
+
+NATURAL LANGUAGE RULE
+Avoid artificial phrases like:
+
+"ensures harmony"
+"practical channel strategy"
+"transform the experience"
+"moving beyond guesswork"
+
+Use practical language instead.
+
+TYPOGRAPHY / SYMBOL RULES
 - NEVER use em dash or en dash symbols (—, –). Use short hyphen-minus (-) only.
-- NEVER use any asterisks (*) in output text (single or repeated). Do not use markdown bold/italic syntax.
-- NEVER use smart or angled quotes: “ ” « » ‘ ’. Use plain ASCII quotes only (" and ').
-- NEVER use non-breaking space (U+00A0). Use regular spaces only.
-- NEVER use ellipsis symbol (…). Use three dots (...) instead.
-- NEVER output zero-width or BOM characters (U+200B, U+200C, U+200D, U+FEFF).
-- Use HTML tags for emphasis (<strong>...</strong>) instead of markdown symbols.
-- Prefer plain ASCII punctuation when possible.
+- NEVER use any asterisks (*).
+- Do not use markdown syntax.
+- NEVER use smart quotes (“ ” « » ‘ ’).
+- Use ASCII quotes only (" and ').
+- NEVER use non-breaking spaces.
+- NEVER output ellipsis symbol (…); use three dots (...) instead.
+- NEVER output zero-width or BOM characters.
+- Use <strong> sparingly for emphasis.
 
+ARTICLE GOAL
+The article must help the reader:
 
-STRUCTURE REQUIREMENTS:
-- contentHtml MUST start with a lead paragraph BEFORE the first H2:
-  - <p><strong>Direct answer...</strong> 1-2 more sentences.</p>
-- H2: 8-12 sections. >=50% of H2 must be questions.
-- H3: 20-40 total (roughly 2-4 H3 under each H2).
-- After every H2 and H3, the next paragraph MUST start with <strong>...</strong>.
+1. Understand the topic quickly
+2. Make a practical content decision
+3. Discover related guides on the site
 
-RICH CONTENT REQUIREMENTS:
-- >= 1 <table>
-- >= 1 <ol> step-by-step
-- >= 1 <blockquote>
-- >= 3 <img> tags with non-empty alt and caption.
-  Use: <figure><img src="..." alt="..." /><figcaption>...</figcaption></figure>
-  IMPORTANT: img src must be a relative filename only (e.g. "example.jpg"), not an absolute path. Do NOT use /images/, /blog/, or full URLs.
+LEAD PARAGRAPH RULE
+contentHtml MUST start with a lead paragraph BEFORE the first H2.
 
-LINKING REQUIREMENTS:
-- Internal links: at least 5 links to /blog/<slug>.html from provided contextLinks.
-  Use natural anchors.
+Format:
 
-FAQ REQUIREMENTS:
-- faq: 5-7 Q/A items.
+<p><strong>Direct answer sentence.</strong> 1-3 supporting sentences explaining the topic.</p>
 
-PRODUCT CONTEXT RULES:
-- WINE-ONLY SCOPE: this site is strictly about wine culture, tasting, regions, wineries, food pairing, and buying guidance.
-- NEVER switch into SaaS/UGC/Shopify/content-automation/AI tool marketing narratives.
-- Forbidden unless topic explicitly asks for industry analysis: how to build a system, automation architecture, prompt engineering playbooks, ecommerce creative workflows, productized AI stacks.
-- If technology is mentioned, keep it minimal and in wine context (for example: cellar apps, label scanning, vineyard climate analytics), not software-building tutorials.
-- Do not invent abstract product brands or recommend generic AI generators as the core solution.
-- Keep examples practical for readers choosing wines, planning winery travel, pairing dishes, or buying bottles.SOURCE INPUT (optional):
-- If user JSON includes sourceHtml, rewrite that content into a better-structured article following ALL rules.
-- Preserve the core meaning and keep it consistent, but fix structure, add missing elements (links/table/FAQ/images), and tighten wording.
+Rules:
+- No generic intro.
+- Do not restate the title.
+- Start with useful information immediately.
 
-SEO TITLE/DESCRIPTION RULES:
-- Title must be unique and specific for each country/region page.
-- Avoid repetitive templates like "Wine in <Country> 2026: ..." for every page.
-- Use 2-3 concrete entities in title/description when possible (for example region + grape + producer/pairing intent).
-- Description must be coherent and complete; never end with dangling fragments like "and perfect."
+STRUCTURE RULES
+Use a clean editorial structure.
 
-OUTPUT JSON SHAPE:
+H2 sections:
+- 6-9 total
+- At least 3 H2 may be questions if natural
+
+H3 sections:
+- Use only when helpful
+- Total H3 count usually 4-10
+- Do not force H3 under every H2
+- Avoid micro sections
+
+SECTION DEPTH RULE
+Each H2 section must contain meaningful explanation.
+
+Minimum length:
+150-220 words per section.
+
+Do not generate tiny sections.
+
+CONTENT DEPTH RULE
+Content must include practical information.
+
+Prefer:
+
+- real ecommerce examples
+- specific platforms and placements
+- named channels and use cases
+- real product categories
+- real publishing scenarios
+
+Avoid vague explanations.
+
+REAL SCENARIO RULE
+Include at least 6 practical scenarios when the topic allows.
+
+Each scenario should include:
+
+- situation
+- recommended creative approach
+- alternative option
+- what to avoid
+- short explanation
+
+Examples of acceptable scenarios:
+
+- Shopify product page refresh
+- Amazon listing image update
+- eBay listing revamp without photoshoot
+- TikTok short-form ad test
+- Pinterest creative batch for catalog
+- Localization rollout for EU market
+
+RICH CONTENT REQUIREMENTS
+Include:
+
+- at least 1 useful table
+- at least 1 ordered list (<ol>)
+- optionally 1 blockquote when meaningful
+- 2-3 images
+
+Image format:
+
+<figure>
+<img src="example.jpg" alt="..." />
+<figcaption>...</figcaption>
+</figure>
+
+Rules:
+- src must be filename only
+- no URLs
+- no directories
+
+TABLE RULES
+Tables must help decision making.
+
+Example format:
+
+Use Case | Best Creative Approach | What To Avoid
+
+Decision tables should usually include 8-12 rows when topic allows.
+
+LINKING RULES
+Internal links:
+
+- at least 5 links when contextLinks are available
+- format: /blog/<slug>.html
+
+Rules:
+- natural anchors
+- do not link to the current page
+- avoid forced links
+
+When relevant also link to:
+
+/blog/
+/pricing/
+
+FAQ RULES
+FAQ must contain 5-7 items.
+
+Questions must sound like real reader questions.
+
+Answers must be concise and must NOT repeat article paragraphs.
+
+ECOMMERCE TOPIC RULE
+Stay strictly within ecommerce content topics.
+
+Allowed topics:
+
+- product photography
+- UGC content workflows
+- Shopify and marketplace listings
+- TikTok/Reels/Shorts creatives
+- localization and multilingual assets
+- image-to-video production
+
+Forbidden drift:
+
+- unrelated industries
+- off-topic travel/food narratives
+- generic AI tooling guides without ecommerce context
+- engineering tutorials disconnected from content workflows
+
+If technology appears, keep it directly tied to ecommerce content production and publishing.
+
+TITLE RULES
+Title must be natural and specific.
+
+Avoid repetitive patterns like:
+
+<Topic> 2026
+Essential Guide
+Expert Guide
+Ultimate Guide
+
+Prefer titles based on reader intent.
+
+DESCRIPTION RULES
+Description length:
+150-160 characters.
+
+Rules:
+
+- must be a complete thought
+- no fragments
+- no filler phrases
+
+SOURCE INPUT RULE
+If sourceHtml is provided:
+
+- preserve the meaning
+- rewrite with better structure
+- remove repetition
+- add missing required elements
+
+QUALITY CONTROL BEFORE OUTPUT
+Before returning JSON verify:
+
+1. No forbidden language patterns remain.
+2. No repeated sentence templates exist.
+3. H2 count between 6 and 9.
+4. H3 count not excessive.
+5. At least one useful table exists.
+6. At least 6 real scenarios when topic allows.
+7. No self-links.
+8. Description is 150-160 characters.
+9. The article reads like a human editorial ecommerce guide.
+
+OUTPUT JSON SHAPE
+
 {
   "slug": "string",
   "title": "string",
-  "description": "string (155-160 chars, coherent and complete thought)",
+  "description": "string",
   "category": "string",
-  "heroImage": "string (filename only, e.g. scaling-ai.jpg)",
-  "contentHtml": "string (HTML fragment)",
-  "faq": [{"question":"...","answer":"..."}, ...]
+  "heroImage": "string",
+  "contentHtml": "string",
+  "faq": [
+    {"question":"...","answer":"..."}
+  ]
 }
+
 """.strip()
 
 
@@ -106,6 +315,50 @@ Rules:
 - Avoid forums/social sources unless unavoidable.
 - Keep facts concise and verifiable.
 """.strip()
+
+RESEARCH_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "queries": {"type": "ARRAY", "items": {"type": "STRING"}},
+        "sources": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "title": {"type": "STRING"},
+                    "url": {"type": "STRING"},
+                },
+                "required": ["title", "url"],
+            },
+        },
+        "facts": {"type": "ARRAY", "items": {"type": "STRING"}},
+    },
+    "required": ["queries", "sources", "facts"],
+}
+
+WRITER_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "slug": {"type": "STRING"},
+        "title": {"type": "STRING"},
+        "description": {"type": "STRING"},
+        "category": {"type": "STRING"},
+        "heroImage": {"type": "STRING"},
+        "contentHtml": {"type": "STRING"},
+        "faq": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "question": {"type": "STRING"},
+                    "answer": {"type": "STRING"},
+                },
+                "required": ["question", "answer"],
+            },
+        },
+    },
+    "required": ["slug", "title", "description", "category", "heroImage", "contentHtml", "faq"],
+}
 
 def _tokens(s: str) -> set[str]:
     s = re.sub(r"[^a-z0-9\\s]", " ", (s or "").lower())
@@ -131,8 +384,12 @@ def _gemini_generate(api_key: str, model: str, system: str, user: str, *, use_gr
     # Minimal REST call; supports optional Google Search grounding via tools.
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 
+    response_schema = RESEARCH_RESPONSE_SCHEMA if system == RESEARCH_PROMPT else WRITER_RESPONSE_SCHEMA
     payload: dict[str, Any] = {
-        "generationConfig": {"responseMimeType": "application/json"},
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": response_schema,
+        },
         "contents": [
             {"role": "user", "parts": [{"text": system + "\n\n" + user}]}
         ]
@@ -256,6 +513,48 @@ def _sanitize_json_text(s: str) -> str:
     return ''.join(out)
 
 
+def _extract_first_balanced_json_object(s: str) -> str | None:
+    start = s.find("{")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escaped = False
+
+    for i in range(start, len(s)):
+        ch = s[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == '{':
+            depth += 1
+            continue
+        if ch == '}':
+            depth -= 1
+            if depth == 0:
+                return s[start:i+1]
+
+    return None
+
+
+def _normalize_json_candidate(s: str) -> str:
+    if not s:
+        return s
+    s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    s = re.sub(r",\s*([}\]])", r"\1", s)
+    return s
+
+
 def _parse_json_strict(s: str) -> dict[str, Any]:
     s = (s or "").strip()
     s = re.sub(r"^```(?:json)?\s*", "", s)
@@ -271,25 +570,36 @@ def _parse_json_strict(s: str) -> dict[str, Any]:
         if clipped != s:
             candidates.append(clipped)
 
+    balanced = _extract_first_balanced_json_object(s)
+    if balanced and balanced not in candidates:
+        candidates.append(balanced)
+
     seen: set[str] = set()
     last_err: Exception | None = None
 
     for cand in candidates:
-        if cand in seen:
-            continue
-        seen.add(cand)
+        variants = [cand]
 
-        try:
-            return json.loads(cand)
-        except Exception as e:
-            last_err = e
+        normalized = _normalize_json_candidate(cand)
+        if normalized != cand:
+            variants.append(normalized)
 
-        sanitized = _sanitize_json_text(cand)
-        if sanitized != cand:
+        for variant in variants:
+            if variant in seen:
+                continue
+            seen.add(variant)
+
             try:
-                return json.loads(sanitized)
+                return json.loads(variant)
             except Exception as e:
                 last_err = e
+
+            sanitized = _sanitize_json_text(variant)
+            if sanitized != variant:
+                try:
+                    return json.loads(sanitized)
+                except Exception as e:
+                    last_err = e
 
     if last_err is not None:
         raise last_err
@@ -370,7 +680,7 @@ def generate_draft(
                 "<p><strong>Yes, if you match the intent and keep it factual.</strong></p>"
                 "<h2>What mistakes should you avoid?</h2>"
                 "<p><strong>Avoid fluff and missing internal links.</strong></p>"
-                "<h2>How to optimize the workflow?</h2>"
+                "<h2>How to optimize this approach?</h2>"
                 "<p><strong>Use updated examples and add schema.</strong></p>"
                 "<h2>Which tools help?</h2>"
                 "<p><strong>Use AI plus validation and a publish checklist.</strong></p>"
@@ -380,7 +690,7 @@ def generate_draft(
             "faq": [
                 {"question": "What is the main takeaway?", "answer": "Structure and answer-first improves readability."},
                 {"question": "Do I need schema?", "answer": "FAQ schema can help rich results."},
-                {"question": "How many internal links?", "answer": "Aim for 3-5 relevant links."},
+                {"question": "How many internal links?", "answer": "Use 1 hub link, 2-4 cluster links, and one next-step link."},
             ],
         }
 
@@ -428,7 +738,11 @@ def generate_draft(
 
     # Writer pass (no need to re-run search here; keep output deterministic).
     text, grounding = _gemini_generate(api_key, model, SYSTEM_PROMPT, json.dumps(user), use_grounding=False)
-    out = _parse_json_strict(text)
+    try:
+        out = _parse_json_strict(text)
+    except Exception as e:
+        sample = (text or "").replace("\n", " ").replace("\r", " ")[:700]
+        raise ValueError(f"{e}; model_output_sample={sample}") from e
 
     sources, queries = _extract_sources(grounding)
     out["sources"] = research_sources or sources
