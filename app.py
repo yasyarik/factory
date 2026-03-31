@@ -1294,7 +1294,7 @@ def index(request: Request):
 def list_jobs():
     # Keep UI responsive: clear stale async statuses on polling.
     try:
-        _mark_stale_social_postings(max_age_min=5)
+        _mark_stale_social_postings(max_age_min=12)
         _mark_stale_generating_jobs(max_age_min=60)
     except Exception:
         pass
@@ -3149,7 +3149,7 @@ def linkedin_disconnect():
 def linkedin_connect(request: Request):
     client_id = (os.environ.get("LINKEDIN_CLIENT_ID") or "").strip()
     client_secret = (os.environ.get("LINKEDIN_CLIENT_SECRET") or "").strip()
-    redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or (_site_origin().rstrip("/") + "/factory/linkedin/callback")
+    redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or "https://myugc.studio/factory/linkedin/callback"
 
     if not client_id or not client_secret:
         raise HTTPException(status_code=500, detail="Missing LINKEDIN_CLIENT_ID / LINKEDIN_CLIENT_SECRET in .env")
@@ -3184,7 +3184,7 @@ def linkedin_callback(code: str | None = None, state: str | None = None, error: 
 
     client_id = (os.environ.get("LINKEDIN_CLIENT_ID") or "").strip()
     client_secret = (os.environ.get("LINKEDIN_CLIENT_SECRET") or "").strip()
-    redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or (_site_origin().rstrip("/") + "/factory/linkedin/callback")
+    redirect_uri = (os.environ.get("LINKEDIN_REDIRECT_URI") or "").strip() or "https://myugc.studio/factory/linkedin/callback"
 
     data = linkedin_exchange_code(code=code, redirect_uri=redirect_uri, client_id=client_id, client_secret=client_secret)
 
