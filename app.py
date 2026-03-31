@@ -2367,7 +2367,7 @@ def _ensure_strong_lead_paragraph(html_text: str) -> tuple[str, int]:
         inner = (m_p.group(2) or "").lstrip()
         if not re.match(r"<strong>\s*.+?</strong>", inner, flags=re.IGNORECASE | re.DOTALL):
             plain = _strip_html_text(inner)
-            answer = html.escape(_extract_first_sentence(plain))
+            answer = html_lib.escape(_extract_first_sentence(plain))
             repl = f"<p{m_p.group(1)}><strong>{answer}</strong> " + inner + "</p>"
             head = head[:m_p.start()] + repl + head[m_p.end():]
             changed += 1
@@ -2396,7 +2396,7 @@ def _autofix_answer_first(html_text: str) -> tuple[str, int]:
             inner = (m_p.group(2) or "").lstrip()
             if not re.match(r"<strong>\s*.+?</strong>", inner, flags=re.IGNORECASE | re.DOTALL):
                 plain = _strip_html_text(inner)
-                answer = html.escape(_extract_first_sentence(plain))
+                answer = html_lib.escape(_extract_first_sentence(plain))
                 repl = f"<p{m_p.group(1)}><strong>{answer}</strong> " + inner + "</p>"
                 after = after[:m_p.start()] + repl + after[m_p.end():]
                 parts[i + 1] = after
@@ -2407,7 +2407,7 @@ def _autofix_answer_first(html_text: str) -> tuple[str, int]:
         if htxt.endswith("?"):
             htxt = htxt[:-1].strip()
         seed = _extract_first_sentence(htxt or "Short answer")
-        lead = f"<p><strong>{html.escape(seed)}.</strong></p>"
+        lead = f"<p><strong>{html_lib.escape(seed)}.</strong></p>"
         parts[i + 1] = lead + after
         total += 1
 
