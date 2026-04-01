@@ -4921,9 +4921,6 @@ def _ap_read_settings() -> dict[str, Any]:
             channels = [str(x).strip().lower() for x in parsed if str(x).strip().lower() in ("linkedin", "telegram", "twitter", "tumblr")]
     except Exception:
         channels = []
-    if not channels:
-        channels = ["linkedin", "telegram", "twitter", "tumblr"]
-
     return {
         "enabled": bool(r[0]),
         "times_per_day": int(r[1] or 3),
@@ -5084,7 +5081,9 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
             return result
 
         if not channels:
-            channels = ["linkedin", "telegram", "twitter", "tumblr"]
+            result = {"success": False, "status": "NO_CHANNELS", "message": "no autopublish channels selected"}
+            _ap_log_run(started, utcnow_iso(), trigger, None, "NO_CHANNELS", result)
+            return result
 
         with db_connect(DB_PATH) as conn:
             rows = conn.execute(
@@ -5303,7 +5302,7 @@ async def autopublish_set_settings(request: Request):
     times_per_day = int(body.get("timesPerDay") or body.get("times_per_day") or 3)
     times_per_day = max(1, min(8, times_per_day))
 
-    channels = body.get("channels") or ["linkedin", "telegram", "twitter", "tumblr"]
+    channels = body.get("channels", [])
     if not isinstance(channels, list):
         raise HTTPException(status_code=400, detail="channels must be list")
     channels = [str(x).strip().lower() for x in channels if str(x).strip().lower() in ("linkedin", "telegram", "twitter", "tumblr")]
