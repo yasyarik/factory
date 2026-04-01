@@ -15,6 +15,10 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import html as html_lib
+import base64
+import hashlib
+import hmac
+import crypt
 
 try:
     from zoneinfo import ZoneInfo
@@ -22,7 +26,7 @@ except Exception:
     ZoneInfo = None
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from factory.db import db_init, db_connect, log_event
@@ -172,6 +176,233 @@ def _pick_category_from_content(*, topic: str | None, title: str | None, descrip
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
 app = FastAPI()
+
+
+FACTORY_SESSION_COOKIE = "factory_session"
+FACTORY_SESSION_TTL_SECONDS = int((os.environ.get("FACTORY_SESSION_TTL_SECONDS") or "43200").strip())
+FACTORY_HTPASSWD_FILE = os.environ.get("FACTORY_HTPASSWD_FILE", "/etc/nginx/.htpasswd_factory")
+
+
+def _factory_secret() -> bytes:
+    raw = (os.environ.get("FACTORY_SESSION_SECRET") or os.environ.get("FACTORY_COOKIE_SECRET") or "yaswine-factory-session-secret").strip()
+    return raw.encode("utf-8")
+
+
+def _factory_b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _factory_b64url_decode(data: str) -> bytes:
+    pad = '=' * ((4 - (len(data) % 4)) % 4)
+    return base64.urlsafe_b64decode((data + pad).encode("ascii"))
+
+
+def _factory_sign(payload: str) -> str:
+    sig = hmac.new(_factory_secret(), payload.encode("utf-8"), hashlib.sha256).digest()
+    return _factory_b64url(sig)
+
+
+def _factory_issue_token(username: str) -> str:
+    exp = int(time.time()) + max(600, FACTORY_SESSION_TTL_SECONDS)
+    nonce = secrets.token_urlsafe(8)
+    payload = f"{username}:{exp}:{nonce}"
+    return f"{_factory_b64url(payload.encode('utf-8'))}.{_factory_sign(payload)}"
+
+
+def _factory_verify_token(token: str | None) -> tuple[bool, str | None]:
+    if not token or '.' not in token:
+        return (False, None)
+    p64, sig = token.split('.', 1)
+    try:
+        payload = _factory_b64url_decode(p64).decode('utf-8', 'ignore')
+    except Exception:
+        return (False, None)
+    expected = _factory_sign(payload)
+    if not hmac.compare_digest(sig, expected):
+        return (False, None)
+    parts = payload.split(':')
+    if len(parts) < 3:
+        return (False, None)
+    user, exp = parts[0], parts[1]
+    try:
+        if int(exp) < int(time.time()):
+            return (False, None)
+    except Exception:
+        return (False, None)
+    return (True, user)
+
+
+def _factory_auth_htpasswd_verify(username: str, password: str) -> bool:
+    if not username or not password:
+        return False
+
+    env_user = (os.environ.get('FACTORY_LOGIN_USER') or '').strip()
+    env_pass = (os.environ.get('FACTORY_LOGIN_PASS') or '').strip()
+    if env_user and env_pass and username == env_user:
+        return hmac.compare_digest(password, env_pass)
+
+    try:
+        lines = Path(FACTORY_HTPASSWD_FILE).read_text(encoding='utf-8', errors='ignore').splitlines()
+    except Exception:
+        lines = []
+
+    for line in lines:
+        if ':' not in line:
+            continue
+        u, h = line.split(':', 1)
+        u = u.strip()
+        h = h.strip()
+        if u != username or not h:
+            continue
+        cand = crypt.crypt(password, h)
+        if cand and hmac.compare_digest(cand, h):
+            return True
+        if h.startswith('$2y$'):
+            h2 = '$2b$' + h[4:]
+            cand2 = crypt.crypt(password, h2)
+            if cand2 and hmac.compare_digest(cand2, h2):
+                return True
+    return False
+
+
+def _factory_login_html(error: str = '') -> str:
+    err = html_lib.escape(error or '')
+    html = """<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"> 
+<meta name="robots" content="noindex,nofollow,noarchive,nosnippet">
+<title>Factory Login</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    font-family: Inter, system-ui, -apple-system, Segoe UI, sans-serif;
+    background: #1f0f1a;
+    color: #f3e8ef;
+    min-height: 100vh;
+    margin: 0;
+  }
+  .shell {
+    min-height: 100vh;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: clamp(64px, 12vh, 120px) 24px 24px;
+    box-sizing: border-box;
+  }
+  .card {
+    width: min(420px, 92vw);
+    background: #341427;
+    border: 1px solid #5e2c49;
+    border-radius: 16px;
+    padding: 24px;
+    box-sizing: border-box;
+  }
+  h1 { margin: 0 0 10px; font-size: 34px; line-height: 1.1; font-weight: 800; }
+  .sub { margin: 0 0 14px; color: #d9bfd0; }
+  label { display: block; font-size: 13px; margin: 10px 0 6px; color: #e6c9da; }
+  input {
+    width: 100%;
+    height: 44px;
+    box-sizing: border-box;
+    padding: 0 12px;
+    border-radius: 10px;
+    border: 1px solid #6d3a56;
+    background: #2a1020;
+    color: #fff;
+    outline: none;
+  }
+  input:focus { border-color: #8f5cff; box-shadow: 0 0 0 1px #8f5cff; }
+  .error {
+    min-height: 20px;
+    margin: 0 0 8px;
+    color: #ffb4b4;
+    font-size: 13px;
+  }
+  button {
+    margin-top: 14px;
+    width: 100%;
+    height: 44px;
+    border: 0;
+    border-radius: 10px;
+    background: #d65a9a;
+    color: #190911;
+    font-weight: 700;
+    cursor: pointer;
+  }
+</style>
+</head><body>
+<div class="shell"><form class="card" method="post" action="/factory-login" novalidate>
+<h1>YAS Factory Login</h1><p class="sub">Sign in to access the publishing factory.</p>
+<p class="error" id="form-error">__ERR__</p>
+<label for="username">Login</label><input id="username" name="username" autocomplete="username" required>
+<label for="password">Password</label><input id="password" type="password" name="password" autocomplete="current-password" required>
+<input type="hidden" name="next" value="{next}">
+<button type="submit">Sign in</button></form></div>
+<script>
+(function() {
+  var form = document.querySelector('form.card');
+  var user = document.getElementById('username');
+  var pass = document.getElementById('password');
+  var err = document.getElementById('form-error');
+  form.addEventListener('submit', function(e) {
+    if (!user.value.trim() || !pass.value.trim()) {
+      e.preventDefault();
+      err.textContent = 'Enter login and password.';
+      if (!user.value.trim()) user.focus(); else pass.focus();
+      return;
+    }
+    err.textContent = '';
+  });
+})();
+</script>
+</body></html>"""
+    return html.replace('__ERR__', err)
+
+
+@app.get('/factory-login', response_class=HTMLResponse)
+def factory_login_page(request: Request, next: str = '/'):
+    ok, _ = _factory_verify_token(request.cookies.get(FACTORY_SESSION_COOKIE))
+    if ok:
+        target = next if (next or '').startswith('/') else '/'
+        return RedirectResponse(url=target, status_code=302)
+    html = _factory_login_html('').replace('{next}', html_lib.escape(next if (next or '').startswith('/') else '/'))
+    return HTMLResponse(content=html, headers={'X-Robots-Tag': 'noindex, nofollow, noarchive, nosnippet'})
+
+
+@app.post('/factory-login', response_class=HTMLResponse)
+async def factory_login_submit(request: Request):
+    form = await request.form()
+    username = (form.get('username') or '').strip()
+    password = (form.get('password') or '').strip()
+    next_url = (form.get('next') or '/').strip()
+    if not next_url.startswith('/'):
+        next_url = '/'
+
+    if not _factory_auth_htpasswd_verify(username, password):
+        html = _factory_login_html('Invalid login or password.').replace('{next}', html_lib.escape(next_url))
+        return HTMLResponse(status_code=401, content=html, headers={'X-Robots-Tag': 'noindex, nofollow, noarchive, nosnippet'})
+
+    token = _factory_issue_token(username)
+    resp = RedirectResponse(url=next_url, status_code=302)
+    resp.set_cookie(FACTORY_SESSION_COOKIE, token, max_age=max(600, FACTORY_SESSION_TTL_SECONDS), httponly=True, secure=True, samesite='lax', path='/')
+    resp.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive, nosnippet'
+    return resp
+
+
+@app.get('/factory-logout')
+def factory_logout(next: str = '/factory/factory-login'):
+    target = next if (next or '').startswith('/') else '/factory/factory-login'
+    resp = RedirectResponse(url=target, status_code=302)
+    resp.delete_cookie(FACTORY_SESSION_COOKIE, path='/')
+    resp.headers['X-Robots-Tag'] = 'noindex, nofollow, noarchive, nosnippet'
+    return resp
+
+
+@app.get('/api/internal/factory-auth')
+def factory_internal_auth(request: Request):
+    ok, _ = _factory_verify_token(request.cookies.get(FACTORY_SESSION_COOKIE))
+    if not ok:
+        return Response(status_code=401)
+    return Response(status_code=204)
 
 def _seo_enabled() -> bool:
     raw = (os.environ.get("SEO_MODULE_ENABLED") or "1").strip().lower()
@@ -482,6 +713,38 @@ def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
             if not os.path.exists(os.path.join(blog_dir, card_name)) and os.path.exists(local_abs):
                 return img + "?full=1"
         return img
+
+    def _desc_from_blog_page(href: str) -> str:
+        h = (href or '').strip()
+        if not h:
+            return ''
+        rel = h.lstrip('/')
+        if rel.startswith('blog/'):
+            page_abs = os.path.join(site_root, rel)
+        else:
+            page_abs = os.path.join(site_root, rel)
+        if not os.path.exists(page_abs):
+            return ''
+        try:
+            src_page = Path(page_abs).read_text(encoding='utf-8')
+            for meta in re.finditer(r"<meta\b[^>]*>", src_page, flags=re.IGNORECASE):
+                tag = meta.group(0)
+                if not re.search(r'\bname\s*=\s*(["\'])description\1', tag, flags=re.IGNORECASE):
+                    continue
+                m_content = re.search(r'\bcontent\s*=\s*(["\'])(.*?)\1', tag, flags=re.IGNORECASE | re.DOTALL)
+                if m_content:
+                    val = html_lib.unescape((m_content.group(2) or '').strip())
+                    if val:
+                        return re.sub(r"\s+", " ", val).strip()
+            m_p = re.search(r'<p[^>]*>(.*?)</p>', src_page, flags=re.IGNORECASE | re.DOTALL)
+            if m_p:
+                txt = re.sub(r'<[^>]+>', ' ', m_p.group(1) or '')
+                txt = html_lib.unescape(re.sub(r"\s+", " ", txt).strip())
+                if txt:
+                    return txt[:220]
+        except Exception:
+            return ''
+        return ''
     for m in pattern.finditer(src):
         href = (m.group(1) or '').strip()
         image = (m.group(2) or '').strip()
@@ -491,6 +754,8 @@ def _rebuild_blog_feed_from_index(index_path: str, out_path: str) -> None:
 
         if not href:
             continue
+        if not desc:
+            desc = _desc_from_blog_page(href)
         if image and not image.startswith('/'):
             image = '/blog/' + image.lstrip('./')
 
@@ -619,12 +884,30 @@ def _section_feed_posts_for_locale(locale: str, site_root: str) -> list[dict[str
             return ""
         try:
             page_src = Path(p_abs).read_text(encoding="utf-8")
-            m = re.search(r'<meta\s+name="description"\s+content="([^"]+)"', page_src, flags=re.IGNORECASE)
-            if m:
-                return html_lib.unescape((m.group(1) or "").strip())
+
+            # Robust meta-description extraction: supports any attribute order and quote type.
+            for meta in re.finditer(r"<meta\b[^>]*>", page_src, flags=re.IGNORECASE):
+                tag = meta.group(0)
+                m_name = re.search(r'\bname\s*=\s*(["\'])description\1', tag, flags=re.IGNORECASE)
+                if not m_name:
+                    continue
+                m_content = re.search(r'\bcontent\s*=\s*(["\'])(.*?)\1', tag, flags=re.IGNORECASE | re.DOTALL)
+                if m_content:
+                    val = html_lib.unescape((m_content.group(2) or "").strip())
+                    if val:
+                        return re.sub(r"\s+", " ", val).strip()
+
+            # Fallback: first meaningful paragraph text.
+            m_p = re.search(r"<p[^>]*>(.*?)</p>", page_src, flags=re.IGNORECASE | re.DOTALL)
+            if m_p:
+                txt = re.sub(r"<[^>]+>", " ", m_p.group(1) or "")
+                txt = html_lib.unescape(re.sub(r"\s+", " ", txt).strip())
+                if txt:
+                    return txt[:220]
         except Exception:
             return ""
         return ""
+
 
     rows: list[dict[str, Any]] = []
     for section in ("wine-countries", "wine-regions"):
