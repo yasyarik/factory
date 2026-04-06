@@ -876,7 +876,7 @@ def _section_feed_posts_for_locale(locale: str, site_root: str) -> list[dict[str
                         return og
             except Exception:
                 pass
-        return "/logo.png"
+        return "/hero_ai.jpg"
 
     def _desc_from_page(section: str, slug: str) -> str:
         p_abs = _page_abs(section, slug)
@@ -4151,7 +4151,7 @@ def preview(job_id: str):
         description=desc or "",
         category=cat or "Buying Guides",
         slug=slug or "preview",
-        hero_image=hero or "logo.png",
+        hero_image=hero or "",
         content_html=content_html,
         faq=faq,
         sources=sources,
@@ -4259,13 +4259,22 @@ def publish(job_id: str):
         else:
             log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e}")
 
+    if not is_section_page:
+        hero_base = os.path.basename((hero or "").strip())
+        if (not hero_base) or (hero_base.lower() == "logo.png"):
+            msg = "Publish blocked: missing real hero image (logo fallback is forbidden)"
+            log_event(DB_PATH, job_id, "ERROR", msg)
+            with db_connect(DB_PATH) as conn:
+                conn.execute("UPDATE jobs SET status='ERROR', error=?, updated_at=? WHERE id=?", (msg, utcnow_iso(), job_id))
+            raise HTTPException(status_code=500, detail=msg)
+
     if is_section_page:
         html = _render_seo_section_html(
             title=title or "",
             description=desc or "",
             section=section,
             slug=slug,
-            hero_image=hero or "logo.png",
+            hero_image=hero or "",
             content_html=content_html,
             updated_at=updated_at or utcnow_iso(),
             locale="en",
@@ -4279,7 +4288,7 @@ def publish(job_id: str):
             description=desc or "",
             category=cat or "Buying Guides",
             slug=slug,
-            hero_image=hero or "logo.png",
+            hero_image=hero or "",
             content_html=content_html,
             faq=faq,
             sources=sources,
@@ -4321,7 +4330,7 @@ def publish(job_id: str):
                 title=title or "",
                 description=desc or "",
                 category=cat or "Buying Guides",
-                hero_image=os.path.basename(hero or "logo.png"),
+                hero_image=os.path.basename(hero) if hero else "",
             )
             upsert_sitemap_url(SITEMAP_PATH, url=url)
 
@@ -4422,7 +4431,7 @@ def publish(job_id: str):
                 description=loc_desc,
                 section=section,
                 slug=slug,
-                hero_image=hero or "logo.png",
+                hero_image=hero or "",
                 content_html=loc_content,
                 updated_at=updated_at or utcnow_iso(),
                 locale=loc,
@@ -4436,7 +4445,7 @@ def publish(job_id: str):
                 description=loc_desc,
                 category=loc_cat,
                 slug=slug,
-                hero_image=hero or "logo.png",
+                hero_image=hero or "",
                 content_html=loc_content,
                 faq=loc_faq,
                 sources=sources,
@@ -4476,7 +4485,7 @@ def publish(job_id: str):
                     title=loc_title,
                     description=loc_desc,
                     category=loc_cat,
-                    hero_image=f"/blog/{os.path.basename(hero or 'logo.png')}",
+                    hero_image=(f"/blog/{os.path.basename(hero)}" if hero else ""),
                     href_prefix=f"/{loc}/blog",
                     marker_prefix=f"FACTORY-{loc.upper()}",
                 )
@@ -4526,7 +4535,7 @@ def publish(job_id: str):
     with db_connect(DB_PATH) as conn:
         conn.execute(
             "UPDATE jobs SET status='PUBLISHED', published_url=?, hero_image=?, draft_html=?, error=NULL, updated_at=? WHERE id=?",
-            (url, os.path.basename(hero or "logo.png"), content_html, utcnow_iso(), job_id),
+            (url, (os.path.basename(hero) if hero else ""), content_html, utcnow_iso(), job_id),
         )
 
     log_event(DB_PATH, job_id, "PUBLISHED", f"Published: {url}")

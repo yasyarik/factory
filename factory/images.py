@@ -264,9 +264,9 @@ def ensure_hero_and_inline_images(
         # Deterministic hero name.
         hero_basename = f"{_slugify(slug)}-hero"
 
-        # If no API key, fall back to existing assets without failing publish.
+        # Hard rule: never use logo fallback for article hero images.
         if not api_key:
-            hero_filename = hero_hint or "logo.png"
+            raise RuntimeError("Hero image generation blocked: missing Gemini API key and no valid existing hero image")
         else:
             prompt = (
                 "Create a photorealistic hero image for a blog article. "

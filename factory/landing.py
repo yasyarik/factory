@@ -124,8 +124,21 @@ def _prefer_webp_url(image_url: str, blog_dir: str) -> str:
     if u.startswith("http://") or u.startswith("https://"):
         return u
 
-    raw = u.split("?", 1)[0]
+    # Normalize bare local filenames to absolute /blog/ paths for stable rendering
+    # from /blog/ and /blog/index/ routes.
+    q = ""
+    if "?" in u:
+        raw, q = u.split("?", 1)
+        q = "?" + q
+    else:
+        raw = u
     fname = os.path.basename(raw)
+    if not u.startswith("/") and fname and os.path.exists(os.path.join(blog_dir, fname)):
+        u = f"/blog/{fname}{q}"
+        raw = f"/blog/{fname}"
+
+    raw_no_q = u.split("?", 1)[0]
+    fname = os.path.basename(raw_no_q)
     root_dir = os.path.dirname(blog_dir)
     base, ext = os.path.splitext(fname)
     if ext.lower() not in (".png", ".jpg", ".jpeg"):
@@ -300,7 +313,9 @@ def render_post_html(
     elif hero_file and os.path.exists(hero_in_root):
         image_placeholder = _prefer_webp_url(f"/{hero_file}", blog_dir)
     else:
-        image_placeholder = "/logo.png"
+        m_first = re.search(r'<img\b[^>]*\bsrc=(?:"([^"]+)"|\'([^\']+)\')', content_html or "", flags=re.IGNORECASE)
+        src = (m_first.group(1) or m_first.group(2) or "").strip() if m_first else ""
+        image_placeholder = src if src else "/hero_ai.jpg"
 
     # PDF targets: title 55-60 chars, description 155-160 chars.
     meta_title = re.sub(r"\s+", " ", (title or "").strip())
@@ -530,7 +545,7 @@ def upsert_blog_index_card(
     src = _read(index_path)
 
     clean_prefix = "/" + href_prefix.strip("/")
-    href = f"{clean_prefix}/{slug}.html"
+    href = f"{clean_prefix}/{slug}/"
     marker = f"<!-- {marker_prefix}:{slug} -->"
 
     if marker in src:
@@ -592,7 +607,7 @@ def remove_blog_index_card(
         return
 
     clean_prefix = "/" + href_prefix.strip("/")
-    href = f"{clean_prefix}/{slug}.html"
+    href = f"{clean_prefix}/{slug}/"
     marker = f"<!-- {marker_prefix}:{slug} -->"
     if marker not in src:
         return
