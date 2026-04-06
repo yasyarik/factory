@@ -275,10 +275,14 @@ def ensure_hero_and_inline_images(
             hero_candidates.append(src_name)
 
     hero_filename = ""
+    hero_from_inline_src = ""
     for cand in hero_candidates:
         abs_cand = os.path.join(blog_dir, cand)
         if not os.path.exists(abs_cand):
             continue
+        # If hero came from inline candidates (not explicit hint), mark it to remove duplicate inline image later.
+        if cand != hero_hint:
+            hero_from_inline_src = cand
         if cand.lower().endswith(".webp"):
             hero_filename = cand
         else:
@@ -325,6 +329,35 @@ def ensure_hero_and_inline_images(
                 with open(hero_path, "wb") as f:
                     f.write(img_bytes)
                 generated.append(GeneratedImage(filename=hero_filename, abs_path=hero_path))
+
+    # If we reused an inline image as hero, remove only its first occurrence from article body
+    # to avoid duplicate hero + identical first figure.
+    if hero_from_inline_src:
+        patt = re.compile(r"<figure[^>]*>\s*<img\b[^>]*?\bsrc=(?:\"([^\"]+)\"|'([^']+)')[^>]*>.*?</figure>", re.IGNORECASE | re.DOTALL)
+        removed = False
+        def _rm_first(m):
+            nonlocal removed
+            if removed:
+                return m.group(0)
+            src = (m.group(1) or m.group(2) or "").strip()
+            if os.path.basename(src) == hero_from_inline_src:
+                removed = True
+                return ""
+            return m.group(0)
+        content_html = patt.sub(_rm_first, content_html or "")
+        if not removed:
+            patt2 = re.compile(r"<img\b[^>]*?\bsrc=(?:\"([^\"]+)\"|'([^']+)')[^>]*>", re.IGNORECASE)
+            removed2 = False
+            def _rm_img(m):
+                nonlocal removed2
+                if removed2:
+                    return m.group(0)
+                src = (m.group(1) or m.group(2) or "").strip()
+                if os.path.basename(src) == hero_from_inline_src:
+                    removed2 = True
+                    return ""
+                return m.group(0)
+            content_html = patt2.sub(_rm_img, content_html or "")
 
     # 2) Inline images referenced in HTML
     # We only generate for relative filenames (no http(s), no /, no ../)
