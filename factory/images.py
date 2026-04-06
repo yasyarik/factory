@@ -276,18 +276,43 @@ def ensure_hero_and_inline_images(
 
     hero_filename = ""
     hero_from_inline_src = ""
+    # Also check live mirror directory where older generated images may exist.
+    fallback_dirs = [blog_dir, "/var/www/yaswine/blog"]
+
     for cand in hero_candidates:
-        abs_cand = os.path.join(blog_dir, cand)
-        if not os.path.exists(abs_cand):
+        src_abs = ""
+        for d in fallback_dirs:
+            test_abs = os.path.join(d, cand)
+            if os.path.exists(test_abs):
+                src_abs = test_abs
+                break
+        if not src_abs:
             continue
+
         # If hero came from inline candidates (not explicit hint), mark it to remove duplicate inline image later.
         if cand != hero_hint:
             hero_from_inline_src = cand
+
         if cand.lower().endswith(".webp"):
-            hero_filename = cand
+            hero_filename = os.path.basename(cand)
+            # Copy from fallback location if needed
+            target_abs = os.path.join(blog_dir, hero_filename)
+            if src_abs != target_abs and not os.path.exists(target_abs):
+                from shutil import copyfile
+                copyfile(src_abs, target_abs)
+                generated.append(GeneratedImage(filename=hero_filename, abs_path=target_abs))
         else:
-            hero_filename = _convert_file_to_webp(abs_cand)
-            generated.append(GeneratedImage(filename=hero_filename, abs_path=os.path.join(blog_dir, hero_filename)))
+            if src_abs.startswith(blog_dir.rstrip('/') + '/'):
+                hero_filename = _convert_file_to_webp(src_abs)
+                generated.append(GeneratedImage(filename=hero_filename, abs_path=os.path.join(blog_dir, hero_filename)))
+            else:
+                # Convert into target blog_dir
+                from shutil import copyfile
+                tmp_target = os.path.join(blog_dir, os.path.basename(cand))
+                if not os.path.exists(tmp_target):
+                    copyfile(src_abs, tmp_target)
+                hero_filename = _convert_file_to_webp(tmp_target)
+                generated.append(GeneratedImage(filename=hero_filename, abs_path=os.path.join(blog_dir, hero_filename)))
         break
 
     if not hero_filename:
