@@ -252,21 +252,46 @@ def ensure_hero_and_inline_images(
     os.makedirs(blog_dir, exist_ok=True)
 
     # 1) Hero
+    # Root cause fix: if article already has a real image, reuse it as hero.
+    # Do NOT require square ratio for existing local images.
     hero_hint = os.path.basename(hero_image_hint) if hero_image_hint else ""
-    if hero_hint and os.path.exists(os.path.join(blog_dir, hero_hint)) and _is_square_path(os.path.join(blog_dir, hero_hint)):
-        hero_abs = os.path.join(blog_dir, hero_hint)
-        if hero_hint.lower().endswith(".webp"):
-            hero_filename = hero_hint
+
+    # Collect candidate hero filenames from hint + first local inline image.
+    hero_candidates: list[str] = []
+    if hero_hint:
+        hero_candidates.append(hero_hint)
+
+    for m in re.finditer(r"<img\b[^>]*?\bsrc=(?:\"([^\"]+)\"|'([^']+)')", content_html or "", flags=re.IGNORECASE):
+        src = (m.group(1) or m.group(2) or "").strip()
+        if not src:
+            continue
+        if src.startswith("http://") or src.startswith("https://"):
+            continue
+        if src.startswith("/"):
+            src_name = os.path.basename(src)
         else:
-            hero_filename = _convert_file_to_webp(hero_abs)
+            src_name = os.path.basename(src)
+        if src_name and src_name not in hero_candidates:
+            hero_candidates.append(src_name)
+
+    hero_filename = ""
+    for cand in hero_candidates:
+        abs_cand = os.path.join(blog_dir, cand)
+        if not os.path.exists(abs_cand):
+            continue
+        if cand.lower().endswith(".webp"):
+            hero_filename = cand
+        else:
+            hero_filename = _convert_file_to_webp(abs_cand)
             generated.append(GeneratedImage(filename=hero_filename, abs_path=os.path.join(blog_dir, hero_filename)))
-    else:
+        break
+
+    if not hero_filename:
         # Deterministic hero name.
         hero_basename = f"{_slugify(slug)}-hero"
 
-        # Hard rule: never use logo fallback for article hero images.
         if not api_key:
-            raise RuntimeError("Hero image generation blocked: missing Gemini API key and no valid existing hero image")
+            raise RuntimeError("Hero image generation blocked: no existing local image and missing Gemini API key")
         else:
             prompt = (
                 "Create a photorealistic hero image for a blog article. "

@@ -3876,7 +3876,7 @@ async def import_existing_post(request: Request):
             bg = (m_bg.group(1) or "").strip().strip("\"'")
 
             hero = os.path.basename(bg) or None
-    hero = hero or "logo.png"
+    hero = hero or ""
     # Extract only the inner .post-content (exclude share/CTA blocks that the template adds).
     m_content = re.search(r'(?is)<div\s+class="post-content"[^>]*>(.*?)</div>\s*<div\s+class="share-section"', src)
     if not m_content:
