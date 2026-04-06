@@ -107,7 +107,7 @@ def list_existing_posts(blog_dir: str) -> list[dict[str, str]]:
         posts.append(
             {
                 "slug": slug,
-                "url": f"/blog/{slug}.html",
+                "url": f"/blog/{slug}/",
                 "title": title,
                 "description": desc,
                 "category": cat,
@@ -307,8 +307,7 @@ def render_post_html(
     if len(meta_title) > 60:
         meta_title = meta_title[:60].rsplit(" ", 1)[0].rstrip("-:|,")
     if len(meta_title) < 55:
-                if len(meta_title) < 55:
-            meta_title = (meta_title + " - Complete Guide")[:60].rstrip("-:|,")
+        meta_title = (meta_title + " - Complete Guide")[:60].rstrip("-:|,")
 
     meta_desc = re.sub(r"\s+", " ", (description or "").strip())
     if len(meta_desc) > 160:
@@ -358,7 +357,7 @@ def render_post_html(
     origin = _site_origin().rstrip("/")
     parent = os.path.basename(os.path.dirname(blog_dir))
     locale_prefix = f"/{parent}" if parent in {"de", "es", "fr", "ru"} else ""
-    url = f"{origin}{locale_prefix}/blog/{slug}.html"
+    url = f"{origin}{locale_prefix}/blog/{slug}/"
     date_iso = (updated_at or "").split("T", 1)[0] or _utc_date()
 
     if noindex or locale_prefix:

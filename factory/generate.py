@@ -54,7 +54,7 @@ RICH CONTENT REQUIREMENTS:
   IMPORTANT: img src must be a relative filename only (e.g. "example.jpg"), not an absolute path. Do NOT use /images/, /blog/, or full URLs.
 
 LINKING REQUIREMENTS:
-- Internal links: at least 5 links to /blog/<slug>.html from provided contextLinks.
+- Internal links: at least 5 links to /blog/<slug>/ from provided contextLinks.
   Use natural anchors.
 
 FAQ REQUIREMENTS:

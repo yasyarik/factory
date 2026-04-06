@@ -955,13 +955,13 @@ def _section_feed_posts_for_locale(locale: str, site_root: str) -> list[dict[str
 
 def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
     origin = _site_origin()
-    canonical = f"{origin}/{locale}/blog/{slug}.html" if locale != "en" else f"{origin}/blog/{slug}.html"
+    canonical = f"{origin}/{locale}/blog/{slug}/" if locale != "en" else f"{origin}/blog/{slug}/"
     alts = {
-        "en": f"{origin}/blog/{slug}.html",
-        "ru": f"{origin}/ru/blog/{slug}.html",
-        "es": f"{origin}/es/blog/{slug}.html",
-        "de": f"{origin}/de/blog/{slug}.html",
-        "fr": f"{origin}/fr/blog/{slug}.html",
+        "en": f"{origin}/blog/{slug}/",
+        "ru": f"{origin}/ru/blog/{slug}/",
+        "es": f"{origin}/es/blog/{slug}/",
+        "de": f"{origin}/de/blog/{slug}/",
+        "fr": f"{origin}/fr/blog/{slug}/",
     }
     block = (
         f'<link href="{canonical}" rel="canonical"/>'
@@ -1040,7 +1040,7 @@ def _rewrite_section_blog_artifacts(html: str, section: str, slug: str, locale: 
 
     origin = _site_origin().rstrip("/")
     locale_prefix = f"/{locale}" if locale and locale != "en" else ""
-    blog_url = f"{origin}{locale_prefix}/blog/{slug}.html"
+    blog_url = f"{origin}{locale_prefix}/blog/{slug}/"
     section_url = f"{origin}{locale_prefix}/{section}/{slug}/"
     section_index = f"{origin}{locale_prefix}/{section}/"
     section_name = "Wine Countries" if section == "wine-countries" else ("Wine Regions" if section == "wine-regions" else "Wine")
@@ -3846,7 +3846,7 @@ async def import_existing_post(request: Request):
             if x and x not in sugg:
                 sugg.append(x)
         hint = (" Did you mean: " + ", ".join(sugg)) if sugg else ""
-        raise HTTPException(status_code=404, detail=f"Not found: /blog/{slug}.html.{hint}")
+        raise HTTPException(status_code=404, detail=f"Not found: /blog/{slug}/.{hint}")
 
     with open(src_path, "r", encoding="utf-8") as f:
         src = f.read()
@@ -3917,7 +3917,7 @@ async def import_existing_post(request: Request):
                 (job_id, title or slug, slug, title or slug, desc, cat, hero, content_html, now, now),
             )
 
-    log_event(DB_PATH, job_id, "READY", f"Imported from /blog/{slug}.html")
+    log_event(DB_PATH, job_id, "READY", f"Imported from /blog/{slug}/")
     return {"success": True, "id": job_id, "slug": slug}
 
 
@@ -4297,7 +4297,7 @@ def publish(job_id: str):
         html = _apply_hreflang_block(html, slug, "en")
         out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
         out_rel = os.path.join("blog", f"{slug}.html")
-        url = f"{_site_origin()}/blog/{slug}.html"
+        url = f"{_site_origin()}/blog/{slug}/"
 
     os.makedirs(os.path.dirname(out_abs), exist_ok=True)
     with open(out_abs, "w", encoding="utf-8") as f:
@@ -4357,7 +4357,7 @@ def publish(job_id: str):
             loc_blog_dir = _locale_blog_dir(loc)
             loc_out_abs = os.path.join(loc_blog_dir, f"{slug}.html")
             loc_out_rel = os.path.join(loc, "blog", f"{slug}.html")
-            loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+            loc_url = f"{_site_origin()}/{loc}/blog/{slug}/"
             loc_idx_rel = os.path.join(loc, "blog", "index.html")
 
         loc_title = title or ""
@@ -4749,7 +4749,7 @@ def unpublish(job_id: str):
     else:
         out_rel = os.path.join("blog", f"{slug}.html")
         out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
-        url = f"{_site_origin()}/blog/{slug}.html"
+        url = f"{_site_origin()}/blog/{slug}/"
         remove_paths = [out_rel]
         add_paths = [os.path.join("blog", "index.html"), "sitemap-en.xml"]
 
@@ -4763,7 +4763,7 @@ def unpublish(job_id: str):
             loc_blog_dir = _locale_blog_dir(loc)
             loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
             loc_rel = os.path.join(loc, "blog", f"{slug}.html")
-            loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+            loc_url = f"{_site_origin()}/{loc}/blog/{slug}/"
             if os.path.exists(loc_abs):
                 os.remove(loc_abs)
             remove_blog_index_card(
@@ -4836,7 +4836,7 @@ def delete_job(job_id: str):
         else:
             out_rel = os.path.join("blog", f"{slug}.html")
             out_abs = os.path.join(BLOG_DIR, f"{slug}.html")
-            url = f"{_site_origin()}/blog/{slug}.html"
+            url = f"{_site_origin()}/blog/{slug}/"
 
             if os.path.exists(out_abs):
                 os.remove(out_abs)
@@ -4849,7 +4849,7 @@ def delete_job(job_id: str):
                 loc_blog_dir = _locale_blog_dir(loc)
                 loc_abs = os.path.join(loc_blog_dir, f"{slug}.html")
                 loc_rel = os.path.join(loc, "blog", f"{slug}.html")
-                loc_url = f"{_site_origin()}/{loc}/blog/{slug}.html"
+                loc_url = f"{_site_origin()}/{loc}/blog/{slug}/"
 
                 if os.path.exists(loc_abs):
                     os.remove(loc_abs)
@@ -5658,7 +5658,7 @@ def linkedin_publish(job_id: str, payload: dict[str, Any] | None = None):
         raise HTTPException(status_code=400, detail="Missing slug")
 
     # We post a link to the live blog page.
-    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}/").strip()
 
 
     # Use exactly the same image as in article HTML (first local <img src>). No social image generation.
@@ -5896,7 +5896,7 @@ def tumblr_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
 
-    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}/").strip()
 
     with db_connect(DB_PATH) as conn:
         conn.execute("UPDATE jobs SET tumblr_status='POSTING', tumblr_error=NULL, updated_at=? WHERE id=?", (utcnow_iso(), job_id))
@@ -5976,7 +5976,7 @@ def telegram_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
 
-    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}/").strip()
 
     # Reuse already generated article images only (no social re-generation).
     # Prefer square inline image from article; fallback to hero if needed.
@@ -6098,7 +6098,7 @@ def twitter_publish(job_id: str, payload: dict[str, Any] | None = None):
     if not slug:
         raise HTTPException(status_code=400, detail="Missing slug")
 
-    url = (published_url or f"{_site_origin()}/blog/{slug}.html").strip()
+    url = (published_url or f"{_site_origin()}/blog/{slug}/").strip()
     include_link = bool(payload.get("includeLink", False))
 
     with db_connect(DB_PATH) as conn:
