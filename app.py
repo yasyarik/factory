@@ -84,7 +84,7 @@ TEMPLATES_DIR = os.path.join(APP_DIR, "templates")
 DB_PATH = os.path.join(APP_DIR, "factory.sqlite")
 ENV_PATH = os.path.join(APP_DIR, ".env")
 
-LANDING_DIR = os.environ.get("LANDING_DIR", "/var/www/landing")
+LANDING_DIR = os.environ.get("LANDING_DIR", "/var/www/yaswine")
 BLOG_DIR = os.path.join(LANDING_DIR, "blog")
 SITEMAP_PATH = os.path.join(LANDING_DIR, "sitemap-en.xml")
 LOCALES = ("ru", "es", "de", "fr")
@@ -4208,7 +4208,7 @@ def publish(job_id: str):
         # SEO landings must have richer visual density than regular blog posts.
         content_html = _ensure_min_inline_placeholders(content_html, slug=slug, min_images=3)
 
-    # Auto-generate hero + inline images into /var/www/landing/blog
+    # Auto-generate hero + inline images into configured BLOG_DIR
     api_key = _active_gemini_api_key()
     image_model = (
         os.environ.get("GEMINI_IMAGE_MODEL")
