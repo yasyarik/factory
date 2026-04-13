@@ -107,7 +107,7 @@ def _to_webp_bytes(img_bytes: bytes) -> bytes:
             out_tmp = f_out.name
 
         p = subprocess.run(
-            ["/usr/bin/convert", in_tmp, "-strip", "-quality", "86", out_tmp],
+            ["/usr/bin/convert", in_tmp, "-strip", "-resize", "700x700>", "-quality", "72", out_tmp],
             capture_output=True,
             text=True,
             timeout=30,
@@ -139,7 +139,7 @@ def _convert_file_to_webp(path: str) -> str:
     webp_path = f"{base_no_ext}.webp"
     if not os.path.exists(webp_path):
         p = subprocess.run(
-            ["/usr/bin/convert", path, "-strip", "-quality", "86", webp_path],
+            ["/usr/bin/convert", path, "-strip", "-resize", "700x700>", "-quality", "72", webp_path],
             capture_output=True,
             text=True,
             timeout=30,
