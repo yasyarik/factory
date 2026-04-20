@@ -427,6 +427,7 @@ SITE_ENV_KEYS = {
     "SITE_BG_ANIMATION_SPEED",
     "SITE_ACCENT_COLOR",
     "SITE_ENABLED_LANGS",
+    "SEO_PUBLISH_LOCALES",
 }
 
 
@@ -2376,6 +2377,26 @@ def _normalize_enabled_languages(raw: str | None) -> list[str]:
     return out or ["en", "ru", "es", "de", "fr"]
 
 
+def _normalize_publish_locales(raw: str | None) -> tuple[str, ...]:
+    tokens = re.split(r"[,;|\s]+", (raw or "").strip())
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        x = (t or "").strip().lower()
+        if x == "en":
+            continue
+        if x not in LOCALES or x in seen:
+            continue
+        seen.add(x)
+        out.append(x)
+    return tuple(out)
+
+
+def _seo_publish_locales() -> tuple[str, ...]:
+    raw = (os.environ.get("SEO_PUBLISH_LOCALES") or os.environ.get("LOCALE_PUBLISH_LANGS") or "").strip()
+    return _normalize_publish_locales(raw) or tuple(LOCALES)
+
+
 def _apply_enabled_languages_to_landing() -> dict[str, Any]:
     langs = _normalize_enabled_languages((os.environ.get("SITE_ENABLED_LANGS") or "").strip())
     js_path = os.path.join(LANDING_DIR, "i18n-switcher.js")
@@ -3231,10 +3252,11 @@ def seo_generate_job(job_id: str):
     return {"ok": ok, "jobId": job_id, "jobStatus": job_status, "error": err}
 
 
-def _cleanup_partial_section_publish(section: str, slug: str, job_id: str, reason: str = "") -> None:
+def _cleanup_partial_section_publish(section: str, slug: str, job_id: str, reason: str = "", locales: tuple[str, ...] | None = None) -> None:
     reason = (reason or "").strip()
+    publish_locales = tuple(locales or LOCALES)
     files_to_remove = [os.path.join(LANDING_DIR, section, slug, "index.html")]
-    for loc in LOCALES:
+    for loc in publish_locales:
         files_to_remove.append(os.path.join(LANDING_DIR, loc, section, slug, "index.html"))
 
     for fp in files_to_remove:
@@ -3246,7 +3268,7 @@ def _cleanup_partial_section_publish(section: str, slug: str, job_id: str, reaso
 
     try:
         remove_sitemap_url(SITEMAP_PATH, url=_section_url(section, slug, "en"))
-        for loc in LOCALES:
+        for loc in publish_locales:
             remove_sitemap_url(_locale_sitemap_path(loc), url=_section_url(section, slug, loc))
     except Exception:
         pass
@@ -3264,12 +3286,13 @@ def _cleanup_partial_section_publish(section: str, slug: str, job_id: str, reaso
         log_event(DB_PATH, job_id, "WARN", msg)
 
 
-def _find_missing_section_locales(section: str, slug: str) -> list[str]:
+def _find_missing_section_locales(section: str, slug: str, locales: tuple[str, ...] | None = None) -> list[str]:
     missing: list[str] = []
+    publish_locales = tuple(locales or LOCALES)
     en_path = os.path.join(LANDING_DIR, section, slug, "index.html")
     if not os.path.exists(en_path):
         missing.append("en")
-    for loc in LOCALES:
+    for loc in publish_locales:
         loc_path = os.path.join(LANDING_DIR, loc, section, slug, "index.html")
         if not os.path.exists(loc_path):
             missing.append(loc)
@@ -3303,6 +3326,7 @@ def seo_publish_job(job_id: str):
         err = str(e) or "publish exception"
 
     section = _seo_section_for_job(job_id)
+    publish_locales = _seo_publish_locales()
 
     with db_connect(DB_PATH) as conn:
         row = conn.execute("SELECT status,published_url,slug FROM jobs WHERE id=?", (job_id,)).fetchone()
@@ -3312,13 +3336,13 @@ def seo_publish_job(job_id: str):
 
     if section and slug:
         if not ok:
-            _cleanup_partial_section_publish(section, slug, job_id, reason="publish failed")
+            _cleanup_partial_section_publish(section, slug, job_id, reason="publish failed", locales=publish_locales)
         else:
-            missing_locales = _find_missing_section_locales(section, slug)
+            missing_locales = _find_missing_section_locales(section, slug, locales=publish_locales)
             if missing_locales:
                 ok = False
                 err = f"incomplete localization publish: missing {','.join(missing_locales)}"
-                _cleanup_partial_section_publish(section, slug, job_id, reason=err)
+                _cleanup_partial_section_publish(section, slug, job_id, reason=err, locales=publish_locales)
                 published_url = None
                 job_status = "ERROR"
 
@@ -4352,7 +4376,10 @@ def publish(job_id: str):
         "fr": "Sur cette page",
     }
     locale_retry_attempts = max(1, min(3, int(os.environ.get("LOCALE_PUBLISH_RETRY_ATTEMPTS", "2") or "2")))
-    for loc in LOCALES:
+    publish_locales = _seo_publish_locales()
+    if job_id:
+        log_event(DB_PATH, job_id, "INFO", f"Publishing locales: {','.join(publish_locales)}")
+    for loc in publish_locales:
         _ensure_sitemap(_locale_sitemap_path(loc))
         loc_sitemap = _locale_sitemap_path(loc)
 
@@ -6205,6 +6232,16 @@ async def settings_site_put(request: Request):
         os.environ["SITE_ENABLED_LANGS"] = langs_csv
         _env_write_updates(ENV_PATH, {"SITE_ENABLED_LANGS": langs_csv}, set())
         langs_result = _apply_enabled_languages_to_landing()
+
+    if "SEO_PUBLISH_LOCALES" in updates:
+        raw_publish_locales = updates.get("SEO_PUBLISH_LOCALES", "")
+        publish_locales = _normalize_publish_locales(raw_publish_locales)
+        if raw_publish_locales and not publish_locales:
+            raise HTTPException(status_code=400, detail="SEO_PUBLISH_LOCALES must contain only ru, es, de, fr")
+        publish_locales_csv = ",".join(publish_locales)
+        updates["SEO_PUBLISH_LOCALES"] = publish_locales_csv
+        os.environ["SEO_PUBLISH_LOCALES"] = publish_locales_csv
+        _env_write_updates(ENV_PATH, {"SEO_PUBLISH_LOCALES": publish_locales_csv}, set())
 
     out = {"success": True, "values": {k: (os.environ.get(k) or "").strip() for k in SITE_ENV_KEYS}}
     if theme_result is not None:

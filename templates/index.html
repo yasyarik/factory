@@ -382,7 +382,12 @@
               </select>
               <button class="primary" id="saveDefaultsBtn">Save defaults</button>
             </div>
-            <div class="muted" style="margin-top:10px;">Used for Create Draft and Add from Discovery.</div>
+            <div class="row" style="margin-top: 10px;">
+              <label class="muted" style="font-weight:900;">SEO publish locales</label>
+              <input id="seoPublishLocales" style="width: 180px;" placeholder="ru,es,de,fr" />
+              <span class="muted">Empty = all. Use de,fr to publish only missing locales.</span>
+            </div>
+            <div class="muted" style="margin-top:10px;">Used for Create Draft and Add from Discovery. SEO publish locales controls which localized SEO pages are generated during publish.</div>
           </div>
 
           <div class="panel" id="ctaPanel">
@@ -596,14 +601,26 @@
         return 'public';
       }
 
-      function applyDefaultsUi() {
+      async function applyDefaultsUi() {
         var dv = getDefaultVisibility();
         if (el('defaultVisibility')) el('defaultVisibility').value = dv;
+        try {
+          var out = await api('/api/settings/site');
+          var values = (out && out.values) ? out.values : {};
+          if (el('seoPublishLocales')) el('seoPublishLocales').value = values.SEO_PUBLISH_LOCALES || '';
+        } catch (e) {}
       }
 
-      function saveDefaults() {
+      async function saveDefaults() {
         var v = (el('defaultVisibility') && el('defaultVisibility').value) ? el('defaultVisibility').value : 'public';
         try { localStorage.setItem('factory.defaultVisibility', v); } catch (e) {}
+        var publishLocales = (el('seoPublishLocales') && el('seoPublishLocales').value || '').trim();
+        await api('/api/settings/site', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ values: { SEO_PUBLISH_LOCALES: publishLocales } })
+        });
+        await applyDefaultsUi();
         alert('Defaults saved');
       }
 
