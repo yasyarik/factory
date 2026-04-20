@@ -1065,6 +1065,7 @@ def _rewrite_section_blog_artifacts(html: str, section: str, slug: str, locale: 
         return m.group(0).replace(src, f"/blog/{src}")
 
     out = re.sub(r'<img[^>]*\bsrc="([^"]+)"', _img_src_to_blog, out, flags=re.IGNORECASE)
+    out = _repair_internal_content_links(out, locale)
     return out
 
 
@@ -1087,6 +1088,78 @@ def _rewrite_blog_inline_img_srcs(html: str) -> str:
 
     return re.sub(r'<img[^>]*\bsrc="([^"]+)"', _img_src_to_blog, out, flags=re.IGNORECASE)
 
+
+
+_DIRECT_INTERNAL_LINK_REPLACEMENTS = {
+    "/blog/wine-and-food-pairing-guide/": "/blog/wine-pairing-guide/",
+    "/blog/wine-and-food-pairing-guide.html": "/blog/wine-pairing-guide/",
+    "/blog/portugal-wine-regions-guide/": "/wine-countries/wine-country-portugal/",
+    "/blog/portugal-wine-regions-guide.html": "/wine-countries/wine-country-portugal/",
+}
+
+
+def _site_internal_path_exists(path: str) -> bool:
+    clean = (path or "").split("?", 1)[0].split("#", 1)[0].strip()
+    if not clean.startswith("/"):
+        return True
+    rel = clean.lstrip("/")
+    candidates = []
+    if clean.endswith("/"):
+        candidates.append(os.path.join(LANDING_DIR, rel, "index.html"))
+        candidates.append(os.path.join(LANDING_DIR, rel.rstrip("/") + ".html"))
+    elif clean.endswith(".html"):
+        candidates.append(os.path.join(LANDING_DIR, rel))
+    else:
+        candidates.append(os.path.join(LANDING_DIR, rel))
+        candidates.append(os.path.join(LANDING_DIR, rel, "index.html"))
+        candidates.append(os.path.join(LANDING_DIR, rel + ".html"))
+    return any(os.path.exists(x) for x in candidates)
+
+
+def _locale_target_path(target: str, locale: str) -> str:
+    loc = (locale or "en").strip().lower()
+    if not loc or loc == "en":
+        return target
+    localized = f"/{loc}{target}"
+    return localized if _site_internal_path_exists(localized) else target
+
+
+def _repair_internal_content_links(html: str, locale: str = "en") -> str:
+    out = html or ""
+    origin = _site_origin().rstrip("/")
+
+    def _fix_anchor(m: re.Match[str]) -> str:
+        attrs = m.group(1) or ""
+        href = (m.group(2) or "").strip()
+        tail_attrs = m.group(3) or ""
+        inner = m.group(4) or ""
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            return m.group(0)
+        path = href
+        if href.startswith(origin + "/"):
+            path = href[len(origin):]
+        elif href.startswith("https://yas.wine/"):
+            path = href[len("https://yas.wine"):]
+        elif href.startswith("http://yas.wine/"):
+            path = href[len("http://yas.wine"):]
+        elif href.startswith("http://") or href.startswith("https://"):
+            return m.group(0)
+        if not path.startswith("/"):
+            return m.group(0)
+
+        mapped = _DIRECT_INTERNAL_LINK_REPLACEMENTS.get(path)
+        if mapped:
+            new_href = _locale_target_path(mapped, locale)
+            if _site_internal_path_exists(new_href):
+                return f'<a{attrs}href="{new_href}"{tail_attrs}>{inner}</a>'
+
+        if _site_internal_path_exists(path):
+            return m.group(0)
+
+        # No guessed destination: preserve text and remove only the broken link.
+        return inner
+
+    return re.sub(r'<a\b([^>]*?)href="([^"]+)"([^>]*)>(.*?)</a>', _fix_anchor, out, flags=re.IGNORECASE | re.DOTALL)
 
 
 def _sanitize_desc_tail(s: str) -> str:
@@ -4305,7 +4378,7 @@ def publish(job_id: str):
             noindex=noindex,
         )
     else:
-        content_html = _rewrite_blog_inline_img_srcs(content_html)
+        content_html = _repair_internal_content_links(_rewrite_blog_inline_img_srcs(content_html), "en")
         html = render_post_html(
             blog_dir=BLOG_DIR,
             title=title or "",
@@ -4447,7 +4520,7 @@ def publish(job_id: str):
             loc_title = tr["title"]
             loc_desc = tr["description"]
             loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
-            loc_content = tr["contentHtml"]
+            loc_content = _repair_internal_content_links(tr["contentHtml"], loc)
             loc_faq = tr["faq"]
         else:
             raise HTTPException(status_code=500, detail=f"Localization {loc} failed: no GEMINI_API_KEY/GOOGLE_API_KEY")
@@ -4465,7 +4538,7 @@ def publish(job_id: str):
                 noindex=noindex,
             )
         else:
-            loc_content = _rewrite_blog_inline_img_srcs(loc_content)
+            loc_content = _repair_internal_content_links(_rewrite_blog_inline_img_srcs(loc_content), loc)
             loc_html = render_post_html(
                 blog_dir=BLOG_DIR,
                 title=loc_title,
