@@ -331,15 +331,10 @@
               <input id="apEndHour" style="width: 100px" placeholder="End" value="21" />
             </div>
             <div class="row">
-              <label class="pill"><input type="checkbox" id="apChLinkedin" checked /> LinkedIn</label>
-              <label class="pill"><input type="checkbox" id="apChTelegram" checked /> Telegram</label>
-              <label class="pill"><input type="checkbox" id="apChTwitter" checked /> X</label>
-              <label class="pill"><input type="checkbox" id="apChTumblr" checked /> Tumblr</label>
-            </div>
-            <div class="row">
-              <label class="pill"><input type="checkbox" id="apLiIncludeLink" /> LinkedIn include link</label>
-              <label class="pill"><input type="checkbox" id="apTgIncludeLink" /> Telegram include link</label>
-              <label class="pill"><input type="checkbox" id="apTuIncludeLink" checked /> Tumblr include link</label>
+              <label class="pill"><input type="checkbox" id="apChLinkedin" checked /> Publish to LinkedIn</label>
+              <label class="pill"><input type="checkbox" id="apChTelegram" checked /> Publish to Telegram</label>
+              <label class="pill"><input type="checkbox" id="apChTwitter" checked /> Publish to X</label>
+              <label class="pill"><input type="checkbox" id="apChTumblr" checked /> Publish to Tumblr</label>
             </div>
           </div>
 
@@ -978,10 +973,6 @@
           if (el('apChTelegram')) el('apChTelegram').checked = ch.indexOf('telegram') >= 0;
           if (el('apChTwitter')) el('apChTwitter').checked = ch.indexOf('twitter') >= 0;
           if (el('apChTumblr')) el('apChTumblr').checked = ch.indexOf('tumblr') >= 0;
-          if (el('apLiIncludeLink')) el('apLiIncludeLink').checked = !!st.linkedin_include_link;
-          if (el('apTgIncludeLink')) el('apTgIncludeLink').checked = !!st.telegram_include_link;
-          if (el('apTuIncludeLink')) el('apTuIncludeLink').checked = !!st.tumblr_include_link;
-
           var slots = Array.isArray(st.slots) ? st.slots.join(', ') : '-';
           if (el('apStatus')) {
             el('apStatus').textContent = 'enabled=' + String(!!st.enabled) + ', slots(h): ' + slots + ', last run: ' + (st.last_run_at || '-');
@@ -1049,9 +1040,6 @@
               startHour: parseInt((el('apStartHour') && el('apStartHour').value) ? el('apStartHour').value : '9', 10),
               endHour: parseInt((el('apEndHour') && el('apEndHour').value) ? el('apEndHour').value : '21', 10),
               channels: channels,
-              linkedinIncludeLink: !!(el('apLiIncludeLink') && el('apLiIncludeLink').checked),
-              telegramIncludeLink: !!(el('apTgIncludeLink') && el('apTgIncludeLink').checked),
-              tumblrIncludeLink: !!(el('apTuIncludeLink') && el('apTuIncludeLink').checked),
             })
           });
           await loadAutopublish();

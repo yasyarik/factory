@@ -5189,10 +5189,8 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
             _ap_log_run(started, utcnow_iso(), trigger, None, "DISABLED", result)
             return result
 
-        if not channels:
-            result = {"success": False, "status": "NO_CHANNELS", "message": "no autopublish channels selected"}
-            _ap_log_run(started, utcnow_iso(), trigger, None, "NO_CHANNELS", result)
-            return result
+        # Social channels are optional. Empty channels means: publish the page to the site
+        # and skip all social networks. Do not block site publication on social settings.
 
         with db_connect(DB_PATH) as conn:
             rows = conn.execute(
@@ -5219,7 +5217,8 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
                 "tumblr": (tu_st or "").upper().strip(),
             }
             has_unposted_channel = any(st_map.get(ch, "") != "POSTED" for ch in channels)
-            if has_unposted_channel:
+            needs_site_publish = not (published_url or "").strip()
+            if needs_site_publish or has_unposted_channel:
                 selected = (jid, slug, (published_url or "").strip())
                 break
 
@@ -5248,7 +5247,8 @@ def _run_autopublish(trigger: str = "manual") -> dict[str, Any]:
                         'tumblr': (tu_st or '').upper().strip(),
                     }
                     has_unposted_channel = any(st_map.get(ch, '') != 'POSTED' for ch in channels)
-                    if has_unposted_channel:
+                    needs_site_publish = not (published_url or '').strip()
+                    if needs_site_publish or has_unposted_channel:
                         selected = (jid, slug, (published_url or '').strip())
                         break
 
@@ -5417,9 +5417,9 @@ async def autopublish_set_settings(request: Request):
     channels = [str(x).strip().lower() for x in channels if str(x).strip().lower() in ("linkedin", "telegram", "twitter", "tumblr")]
 
     timezone_name = (body.get("timezone") or "UTC").strip() or "UTC"
-    linkedin_include_link = bool(body.get("linkedinIncludeLink", body.get("linkedin_include_link", False)))
-    telegram_include_link = bool(body.get("telegramIncludeLink", body.get("telegram_include_link", False)))
-    tumblr_include_link = bool(body.get("tumblrIncludeLink", body.get("tumblr_include_link", False)))
+    linkedin_include_link = False
+    telegram_include_link = False
+    tumblr_include_link = False
     start_hour = int(body.get("startHour") if body.get("startHour") is not None else 9)
     end_hour = int(body.get("endHour") if body.get("endHour") is not None else 21)
     start_hour = max(0, min(23, start_hour))
@@ -5435,6 +5435,7 @@ async def autopublish_set_settings(request: Request):
         end_hour=end_hour,
         linkedin_include_link=linkedin_include_link,
         telegram_include_link=telegram_include_link,
+        tumblr_include_link=tumblr_include_link,
         last_slot_key=st.get("last_slot_key"),
         last_run_at=st.get("last_run_at"),
     )
