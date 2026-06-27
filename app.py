@@ -4649,7 +4649,6 @@ def publish(job_id: str):
             f"{origin}/sitemap-es.xml",
             f"{origin}/sitemap-de.xml",
             f"{origin}/sitemap-fr.xml",
-            f"{origin}/sitemap_blog.xml",
         ]
 
         # Avoid HEAD pre-checks (can be flaky behind CDN/proxy and return empty list).
@@ -5329,7 +5328,7 @@ def _autopublish_loop() -> None:
                         _ap_write_settings(
                             enabled=bool(st.get("enabled")),
                             times_per_day=int(st.get("times_per_day") or 3),
-                            channels=list(st.get("channels") or ["linkedin", "telegram", "twitter", "tumblr"]),
+                            channels=list(st.get("channels") or []),
                             timezone_name=(st.get("timezone") or "UTC"),
                             start_hour=int(st.get("start_hour") or 9),
                             end_hour=int(st.get("end_hour") or 21),
