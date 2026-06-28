@@ -983,6 +983,34 @@ def _apply_hreflang_block(html: str, slug: str, locale: str) -> str:
     return html
 
 
+
+
+def _published_image_paths_from_html(content_html: str, hero_image: str | None = None) -> list[str]:
+    paths: list[str] = []
+
+    def add_src(src: str | None) -> None:
+        raw = (src or "").strip()
+        if not raw or raw.startswith(("http://", "https://", "data:")):
+            return
+        if raw.startswith("/blog/"):
+            raw = raw[len("/blog/"):]
+        elif raw.startswith("blog/"):
+            raw = raw[len("blog/"):]
+        elif raw.startswith("/") or "/" in raw:
+            return
+        name = os.path.basename(raw)
+        if not name or not re.search(r"\.(?:webp|png|jpe?g|gif|avif)$", name, flags=re.IGNORECASE):
+            return
+        if os.path.exists(os.path.join(BLOG_DIR, name)):
+            rel = os.path.join("blog", name)
+            if rel not in paths:
+                paths.append(rel)
+
+    add_src(hero_image)
+    for m in re.finditer(r"<img[^>]*src=[\"']([^\"']+)[\"']", content_html or "", flags=re.IGNORECASE):
+        add_src(m.group(1))
+    return paths
+
 def _ensure_min_inline_placeholders(content_html: str, slug: str, min_images: int = 3) -> str:
     src = content_html or ""
     existing = len(re.findall(r"<img\b", src, flags=re.IGNORECASE))
@@ -1153,7 +1181,10 @@ def _repair_internal_content_links(html: str, locale: str = "en") -> str:
             if _site_internal_path_exists(new_href):
                 return f'<a{attrs}href="{new_href}"{tail_attrs}>{inner}</a>'
 
-        if _site_internal_path_exists(path):
+        localized_path = _locale_target_path(path, locale)
+        if _site_internal_path_exists(localized_path):
+            if localized_path != path:
+                return f'<a{attrs}href="{localized_path}"{tail_attrs}>{inner}</a>'
             return m.group(0)
 
         # No guessed destination: preserve text and remove only the broken link.
@@ -4355,6 +4386,8 @@ def publish(job_id: str):
                 log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e2}")
         else:
             log_event(DB_PATH, job_id, "WARN", f"Image generation skipped/failed: {e}")
+
+    image_paths.extend(_published_image_paths_from_html(content_html, hero))
 
     if not is_section_page:
         hero_base = os.path.basename((hero or "").strip())
