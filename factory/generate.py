@@ -23,7 +23,7 @@ Write a blog article that ranks in Google and is easy for AI answers.
 
 GLOBAL RULES:
 - ZERO FLUFF. No generic intros.
-- ANSWER-FIRST: The first sentence after EVERY H2 and H3 must be a bolded direct answer.
+- Start each section with a direct, useful sentence, but never label it as Answer, Short answer, or answer-first.
 - Output MUST be STRICT JSON only.
 - Obey ALL requirements. If something is missing, FIX it and return corrected JSON (do not explain).
 
@@ -40,10 +40,10 @@ TYPOGRAPHY / SYMBOL RULES:
 
 STRUCTURE REQUIREMENTS:
 - contentHtml MUST start with a lead paragraph BEFORE the first H2:
-  - <p><strong>Direct answer...</strong> 1-2 more sentences.</p>
+  - <p>Direct practical lead. 1-2 more sentences.</p>
 - H2: 8-12 sections. >=50% of H2 must be questions.
 - H3: 20-40 total (roughly 2-4 H3 under each H2).
-- After every H2 and H3, the next paragraph MUST start with <strong>...</strong>.
+- After every H2 and H3, include a normal paragraph that answers the section intent directly.
 
 RICH CONTENT REQUIREMENTS:
 - >= 1 <table>
@@ -380,7 +380,7 @@ def generate_draft(
                 "<p><strong>Track impressions, clicks, and rankings.</strong></p>"
             ),
             "faq": [
-                {"question": "What is the main takeaway?", "answer": "Structure and answer-first improves readability."},
+                {"question": "What is the main takeaway?", "answer": "Clear structure and direct section leads improve readability."},
                 {"question": "Do I need schema?", "answer": "FAQ schema can help rich results."},
                 {"question": "How many internal links?", "answer": "Aim for 3-5 relevant links."},
             ],

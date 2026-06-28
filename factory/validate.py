@@ -44,10 +44,6 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
     lead = _lead_paragraph_before_first_h2(html)
     if not lead:
         problems.append("missing lead paragraph before first H2")
-    else:
-        if not re.match(r"<strong>\s*.+?</strong>", lead.lstrip(), flags=re.IGNORECASE | re.DOTALL):
-            problems.append("lead paragraph must start with <strong>answer</strong>")
-
     h2 = _count(r"<h2\b", html)
     if h2 < 8 or h2 > 12:
         problems.append(f"expected 8-12 H2, got {h2}")
@@ -112,13 +108,8 @@ def validate_draft(draft: dict[str, Any]) -> list[str]:
         blocks = re.split(r"(<" + tag + r"[^>]*>.*?</" + tag + r">)", html, flags=re.IGNORECASE | re.DOTALL)
         for i in range(1, len(blocks), 2):
             after = blocks[i + 1] if i + 1 < len(blocks) else ""
-            m = re.search(r"<p[^>]*>\s*(.*?)</p>", after, flags=re.IGNORECASE | re.DOTALL)
-            if not m:
-                problems.append(f"answer-first: missing paragraph after a {tag.upper()}")
-                break
-            first_p = m.group(1).lstrip()
-            if not re.match(r"<strong>\s*.+?</strong>", first_p, flags=re.IGNORECASE | re.DOTALL):
-                problems.append(f"answer-first: first paragraph after a {tag.upper()} must start with <strong>answer</strong>")
+            if not re.search(r"<p[^>]*>\s*.*?</p>", after, flags=re.IGNORECASE | re.DOTALL):
+                problems.append(f"missing paragraph after a {tag.upper()}")
                 break
 
     return problems

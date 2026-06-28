@@ -461,8 +461,6 @@ def render_post_html(
     meta_title = re.sub(r"\s+", " ", (title or "").strip())
     if len(meta_title) > 60:
         meta_title = meta_title[:60].rsplit(" ", 1)[0].rstrip("-:|,")
-    if len(meta_title) < 55:
-        meta_title = (meta_title + " - Complete Guide")[:60].rstrip("-:|,")
 
     meta_desc = re.sub(r"\s+", " ", (description or "").strip())
     if len(meta_desc) > 160:
@@ -737,8 +735,7 @@ def upsert_blog_index_card(
         excerpt = excerpt[:167].rstrip() + "..."
 
     card = (
-        f'\n            <!-- {marker_prefix}:{slug} -->\n'
-        f'            <a href="{href}" class="blog-card">\n'
+        f'\n            <a href="{href}" class="blog-card">\n'
         f'                <div class="card-image" style="background-image: url(\'{_html_escape(_prefer_webp_url(hero_image, blog_dir))}\');"></div>\n'
         f'                <div class="card-content">\n'
         f'                    <span class="category">{_html_escape(category)}</span>\n'
@@ -778,21 +775,29 @@ def remove_blog_index_card(
     clean_prefix = "/" + href_prefix.strip("/")
     href = f"{clean_prefix}/{slug}/"
     marker = f"<!-- {marker_prefix}:{slug} -->"
-    if marker not in src:
+    if marker in src:
+        pattern = re.compile(
+            re.escape(marker)
+            + r'\s*<a[^>]+href="'
+            + re.escape(href)
+            + r'"[\s\S]*?</a>\s*',
+            flags=re.IGNORECASE,
+        )
+        src = pattern.sub("", src, count=1)
+    elif href in src:
+        pattern = re.compile(
+            r'\s*<a[^>]+href="'
+            + re.escape(href)
+            + r'"[\s\S]*?</a>\s*',
+            flags=re.IGNORECASE,
+        )
+        src = pattern.sub("", src, count=1)
+    else:
         return
 
-    pattern = re.compile(
-        re.escape(marker)
-        + r'\s*<a[^>]+href="'
-        + re.escape(href)
-        + r'"[\s\S]*?</a>\s*',
-        flags=re.IGNORECASE,
-    )
-    out = pattern.sub("", src, count=1)
+    _write(index_path, _normalize_blog_index_seo(src, href_prefix=clean_prefix))
 
-    if out != src:
-        out = _normalize_blog_index_seo(out, href_prefix=clean_prefix)
-        _write(index_path, out)
+
 
 
 def upsert_sitemap_url(sitemap_path: str, *, url: str) -> None:
@@ -811,10 +816,6 @@ def upsert_sitemap_url(sitemap_path: str, *, url: str) -> None:
 
     out = src.replace("</urlset>", entry + "</urlset>")
     _write(sitemap_path, out)
-
-
-
-
 
 
 def remove_sitemap_url(sitemap_path: str, *, url: str) -> None:

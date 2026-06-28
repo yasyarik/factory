@@ -18,6 +18,12 @@ BAD_TOPIC_PHRASES = (
     "don't pay for the upgrade",
     "later addressed",
     "reversed course",
+    "wine dance",
+    "wine your waist",
+    "while pregnant",
+    "during pregnancy",
+    "wine diet",
+    "wine weight loss",
 )
 
 

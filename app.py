@@ -1193,6 +1193,87 @@ def _repair_internal_content_links(html: str, locale: str = "en") -> str:
     return re.sub(r'<a\b([^>]*?)href="([^"]+)"([^>]*)>(.*?)</a>', _fix_anchor, out, flags=re.IGNORECASE | re.DOTALL)
 
 
+
+
+_SERVICE_PHRASE_PATTERNS = (
+    r"\banswer-first\b",
+    r"\bNo posts yet\.?\b",
+    r"\bCreate your first article(?: in the factory)?\.?\b",
+    r"\bFactory-injected\b[^<\n.]*[.]?",
+)
+
+_TITLE_GARBAGE_PATTERNS = (
+    r"\s*[:|,-]?\s*(?:An?\s+)?(?:Expert'?s?|Sommelier'?s|Complete|Ultimate|Definitive)\s+Guide(?:\s+2026)?\s*$",
+    r"\s*[:|,-]?\s*2026\s+(?:Expert|Complete|Ultimate|Definitive)\s+Guide\s*$",
+)
+
+
+def _sanitize_public_text(value: str, *, title_mode: bool = False) -> str:
+    out = html_lib.unescape(str(value or ""))
+    out = re.sub(r"(?i)\b(?:short\s+)?answer\s*:\s*", "", out)
+    for pat in _SERVICE_PHRASE_PATTERNS:
+        out = re.sub(pat, "", out, flags=re.IGNORECASE)
+    if title_mode:
+        for pat in _TITLE_GARBAGE_PATTERNS:
+            out = re.sub(pat, "", out, flags=re.IGNORECASE)
+    out = re.sub(r"\s+([.,;:!?])", r"\1", out)
+    out = re.sub(r"(?:^|\s)[.]+(?=\s|$)", " ", out)
+    out = re.sub(r"\s+", " ", out).strip(" -:|,;.")
+    return out
+
+
+def _sanitize_public_html(html_text: str) -> str:
+    out = str(html_text or "")
+    out = re.sub(r"(?is)<!--\s*(?:FACTORY[^>]*|Factory-injected[^>]*)-->", "", out)
+    out = re.sub(r"(?is)<strong>\s*(?:short\s+)?answer\s*:?\s*</strong>\s*", "", out)
+    out = re.sub(r"(?i)\b(?:short\s+)?answer\s*:\s*", "", out)
+    for pat in _SERVICE_PHRASE_PATTERNS:
+        out = re.sub(pat, "", out, flags=re.IGNORECASE)
+    out = re.sub(r"(?is)<p[^>]*>\s*</p>", "", out)
+    return out
+
+
+def _sanitize_public_draft_payload(draft: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(draft, dict):
+        return draft
+    cleaned = dict(draft)
+    cleaned["title"] = _sanitize_public_text(cleaned.get("title") or "", title_mode=True)
+    cleaned["description"] = fit_meta_description(
+        _sanitize_public_text(cleaned.get("description") or ""),
+        fallback=cleaned.get("title") or "",
+    )
+    if isinstance(cleaned.get("category"), str):
+        cleaned["category"] = _sanitize_public_text(cleaned.get("category") or "")
+    if isinstance(cleaned.get("contentHtml"), str):
+        cleaned["contentHtml"] = _sanitize_public_html(cleaned.get("contentHtml") or "")
+    if isinstance(cleaned.get("faq"), list):
+        faq = []
+        for item in cleaned.get("faq") or []:
+            if not isinstance(item, dict):
+                continue
+            q = _sanitize_public_text(item.get("question") or "")
+            a = _sanitize_public_text(item.get("answer") or "")
+            if q and a:
+                faq.append({"question": q, "answer": a})
+        cleaned["faq"] = faq
+    return cleaned
+
+
+def _forced_noindex_reason(topic: str | None, slug: str | None, title: str | None, description: str | None) -> str:
+    text = " ".join([topic or "", slug or "", title or "", description or ""]).lower()
+    risky = (
+        "wine dance",
+        "wine your waist",
+        "while pregnant",
+        "during pregnancy",
+        "wine diet",
+        "wine weight loss",
+    )
+    for needle in risky:
+        if needle in text:
+            return f"risky or weak topic pattern: {needle}"
+    return ""
+
 def _sanitize_desc_tail(s: str) -> str:
     t = re.sub(r"\s+", " ", (s or "").strip())
     if not t:
@@ -3726,6 +3807,12 @@ def _topic_is_queueable(topic: str) -> bool:
         "nano banana",
         "banano",
         "claude best",
+        "wine dance",
+        "wine your waist",
+        "while pregnant",
+        "during pregnancy",
+        "wine diet",
+        "wine weight loss",
     )
     if any(b in lo for b in banned):
         return False
@@ -4204,14 +4291,8 @@ def generate(job_id: str):
             pass
 
         draft = _ensure_min_faq(draft, topic=topic, min_items=5)
+        draft = _sanitize_public_draft_payload(draft)
         draft["category"] = _pick_category_from_content(topic=topic, title=draft.get("title"), description=draft.get("description"), category_hint=draft.get("category") or category, content_html=draft.get("contentHtml"))
-        try:
-            fixed_html, fixed_count = _autofix_answer_first(str(draft.get("contentHtml") or ""))
-            if fixed_count > 0:
-                draft["contentHtml"] = fixed_html
-                log_event(DB_PATH, job_id, "INFO", f"Auto-fixed answer-first blocks: {fixed_count}")
-        except Exception as _af_err:
-            log_event(DB_PATH, job_id, "WARN", f"answer-first auto-fix skipped: {_af_err}")
         problems = validate_draft(draft)
         if not problems:
             break
@@ -4357,6 +4438,18 @@ def publish(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
 
     status, topic, slug, title, desc, cat, hero, content_html, faq_json, sources_json, updated_at, published_url, visibility = r
+    pub_payload = _sanitize_public_draft_payload({
+        "title": title or "",
+        "description": desc or "",
+        "category": cat or "",
+        "contentHtml": content_html or "",
+        "faq": json.loads(faq_json) if faq_json else [],
+    })
+    title = pub_payload.get("title") or title
+    desc = pub_payload.get("description") or desc
+    cat = pub_payload.get("category") or cat
+    content_html = pub_payload.get("contentHtml") or content_html
+    faq_json = json.dumps(pub_payload.get("faq") or [], ensure_ascii=False)
     cat = _pick_category_from_content(topic=topic, title=title, description=desc, category_hint=cat, content_html=content_html)
 
     if status not in ("READY", "PUBLISHED", "ERROR"):
@@ -4375,6 +4468,10 @@ def publish(job_id: str):
 
     # Hidden means: page exists, but not indexable and not linked from blog index/sitemap.
     noindex = visibility != "public"
+    forced_reason = _forced_noindex_reason(topic, slug, title, desc)
+    if forced_reason:
+        noindex = True
+        log_event(DB_PATH, job_id, "WARN", f"Forced noindex: {forced_reason}")
 
     _ensure_sitemap(SITEMAP_PATH)
 
@@ -4600,11 +4697,18 @@ def publish(job_id: str):
             if tr is None:
                 raise tr_error or HTTPException(status_code=500, detail=f"Localization {loc} failed")
 
-            loc_title = tr["title"]
-            loc_desc = tr["description"]
-            loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=tr.get("category"), content_html=loc_content), loc)
-            loc_content = _repair_internal_content_links(tr["contentHtml"], loc)
-            loc_faq = tr["faq"]
+            loc_payload = _sanitize_public_draft_payload({
+                "title": tr["title"],
+                "description": tr["description"],
+                "category": tr.get("category") or loc_cat,
+                "contentHtml": tr["contentHtml"],
+                "faq": tr["faq"],
+            })
+            loc_title = loc_payload["title"]
+            loc_desc = loc_payload["description"]
+            loc_cat = _localize_category(_pick_category_from_content(topic=topic, title=loc_title, description=loc_desc, category_hint=loc_payload.get("category"), content_html=loc_payload["contentHtml"]), loc)
+            loc_content = _repair_internal_content_links(loc_payload["contentHtml"], loc)
+            loc_faq = loc_payload["faq"]
         else:
             raise HTTPException(status_code=500, detail=f"Localization {loc} failed: no GEMINI_API_KEY/GOOGLE_API_KEY")
 
