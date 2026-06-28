@@ -162,6 +162,142 @@ def _build_breadcrumbs(title: str) -> str:
     )
 
 
+def _blog_ui_strings(locale: str) -> dict[str, str]:
+    loc = (locale or "en").strip().lower()
+    base = {
+        "home": "Home",
+        "blog": "Blog",
+        "countries": "Countries",
+        "all_countries": "All Countries",
+        "back": "Back to Resources",
+        "published": "Published",
+        "min_read": "min read",
+        "share": "Share this article",
+        "toc": "On this page",
+        "toc_aria": "Table of contents",
+        "terms": "Terms of Service",
+        "privacy": "Privacy Policy",
+        "copied": "Link copied to clipboard!",
+        "rights": "All rights reserved.",
+    }
+    table = {
+        "ru": {
+            "home": "Главная",
+            "blog": "Блог",
+            "countries": "Страны",
+            "all_countries": "Все страны",
+            "back": "Назад к материалам",
+            "published": "Опубликовано",
+            "min_read": "мин чтения",
+            "share": "Поделиться статьей",
+            "toc": "На этой странице",
+            "toc_aria": "Содержание",
+            "terms": "Условия использования",
+            "privacy": "Политика конфиденциальности",
+            "copied": "Ссылка скопирована в буфер обмена!",
+            "rights": "Все права защищены.",
+        },
+        "es": {
+            "home": "Inicio",
+            "blog": "Blog",
+            "countries": "Países",
+            "all_countries": "Todos los países",
+            "back": "Volver a los recursos",
+            "published": "Publicado",
+            "min_read": "min de lectura",
+            "share": "Compartir este artículo",
+            "toc": "En esta página",
+            "toc_aria": "Tabla de contenido",
+            "terms": "Términos del servicio",
+            "privacy": "Política de privacidad",
+            "copied": "Enlace copiado al portapapeles!",
+            "rights": "Todos los derechos reservados.",
+        },
+        "de": {
+            "home": "Startseite",
+            "blog": "Blog",
+            "countries": "Länder",
+            "all_countries": "Alle Länder",
+            "back": "Zurück zu den Artikeln",
+            "published": "Veröffentlicht",
+            "min_read": "Min. Lesezeit",
+            "share": "Diesen Artikel teilen",
+            "toc": "Auf dieser Seite",
+            "toc_aria": "Inhaltsverzeichnis",
+            "terms": "Nutzungsbedingungen",
+            "privacy": "Datenschutzerklärung",
+            "copied": "Link in die Zwischenablage kopiert!",
+            "rights": "Alle Rechte vorbehalten.",
+        },
+        "fr": {
+            "home": "Accueil",
+            "blog": "Blog",
+            "countries": "Pays",
+            "all_countries": "Tous les pays",
+            "back": "Retour aux articles",
+            "published": "Publié",
+            "min_read": "min de lecture",
+            "share": "Partager cet article",
+            "toc": "Sur cette page",
+            "toc_aria": "Table des matières",
+            "terms": "Conditions d'utilisation",
+            "privacy": "Politique de confidentialité",
+            "copied": "Lien copié dans le presse-papiers !",
+            "rights": "Tous droits réservés.",
+        },
+    }
+    return table.get(loc, base)
+
+
+def _localize_rendered_blog_html(out: str, locale: str, date_iso: str | None = None, toc_title: str | None = None) -> str:
+    loc = (locale or "en").strip().lower()
+    if not loc or loc == "en":
+        return out
+
+    s = _blog_ui_strings(loc)
+    locale_prefix = f"/{loc}"
+    if not date_iso:
+        m_date = re.search(r'<time[^>]*datetime="([^"]+)"', out or "", flags=re.IGNORECASE)
+        date_iso = (m_date.group(1) if m_date else "") or _utc_date()
+    toc_text = (toc_title or "").strip() or s["toc"]
+
+    out = out.replace('href="/"', f'href="{locale_prefix}/"')
+    out = out.replace('href="/blog/"', f'href="{locale_prefix}/blog/"')
+    out = out.replace('href="/wine-countries/"', f'href="{locale_prefix}/wine-countries/"')
+    out = out.replace('href="/wine-regions/"', f'href="{locale_prefix}/wine-regions/"')
+    out = out.replace('href="/policy/terms/"', f'href="{locale_prefix}/policy/terms/"')
+    out = out.replace('href="/policy/privacy/"', f'href="{locale_prefix}/policy/privacy/"')
+
+    out = out.replace(">Home<", f">{_html_escape(s['home'])}<")
+    out = out.replace(">Blog<", f">{_html_escape(s['blog'])}<")
+    out = out.replace(">Countries<", f">{_html_escape(s['countries'])}<")
+    out = out.replace(">All Countries<", f">{_html_escape(s['all_countries'])}<")
+    out = out.replace("← Back to Resources", "← " + s["back"])
+    out = out.replace(">Share this article<", f">{_html_escape(s['share'])}<")
+    out = out.replace(">Terms of Service<", f">{_html_escape(s['terms'])}<")
+    out = out.replace(">Privacy Policy<", f">{_html_escape(s['privacy'])}<")
+    out = out.replace(">All rights reserved.<", f">{_html_escape(s['rights'])}<")
+    out = out.replace("alert('Link copied to clipboard!');", "alert(" + json.dumps(s["copied"], ensure_ascii=False) + ");")
+    out = out.replace("t.textContent = 'On this page';", "t.textContent = " + json.dumps(toc_text, ensure_ascii=False) + ";")
+    out = out.replace("aside.setAttribute('aria-label', 'Table of contents');", "aside.setAttribute('aria-label', " + json.dumps(s["toc_aria"], ensure_ascii=False) + ");")
+
+    out = re.sub(
+        r'<time([^>]*)datetime="[^"]+"[^>]*>Published\s+[^<]+</time>',
+        lambda m: f'<time{m.group(1)}datetime="{_html_escape(date_iso)}">{_html_escape(s["published"])} {date_iso}</time>',
+        out,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r'>\s*(\d+)\s*min read\s*<',
+        lambda m: ">" + m.group(1) + " " + _html_escape(s["min_read"]) + "<",
+        out,
+        count=1,
+        flags=re.IGNORECASE,
+    )
+    return out
+
+
 def _ensure_heading_ids(content_html: str) -> tuple[str, list[dict[str, str]]]:
     # Adds id attributes to h2/h3 and returns a toc model.
     # Important: include headings that already have id="..." so TOC is never lost.
@@ -488,9 +624,38 @@ def render_post_html(
         flags=re.IGNORECASE,
     )
 
+    # Replace the legacy CSS background hero with a real image element so localized
+    # blog pages do not depend on background rendering quirks.
+    hero_markup = (
+        '<figure class="post-hero">'
+        f'<img class="post-hero-image" src="{_html_escape(image_placeholder)}" alt="{_html_escape(title)}" loading="eager" decoding="async" fetchpriority="high"/>'
+        '</figure>'
+    )
+    out = re.sub(
+        r'(?is)<div\s+class="post-hero"[^>]*style="[^\"]*background-image:\s*url\([^)]+\)[^\"]*"[^>]*></div>',
+        hero_markup,
+        out,
+        count=1,
+    )
+    if ".post-hero-image" not in out and "</style>" in out:
+        hero_css = """
+        .post-hero { overflow: hidden; }
+        .post-hero-image {
+            display: block;
+            width: 100%;
+            min-height: 450px;
+            height: auto;
+            object-fit: cover;
+            background: rgba(255,255,255,0.02);
+        }
+        """
+        out = out.replace("</style>", hero_css + "\n    </style>", 1)
+
     # Fix hero relative path.
     out = out.replace("url('blog/", "url('")
     out = out.replace('url("blog/', 'url("')
+
+    out = _localize_rendered_blog_html(out, parent, date_iso=date_iso, toc_title=toc_title)
 
     return out
 
