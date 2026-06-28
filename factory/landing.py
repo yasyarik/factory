@@ -697,6 +697,31 @@ def _normalize_blog_index_seo(src: str, href_prefix: str = "/blog") -> str:
     return src
 
 
+_BAD_EXCERPT_RE = re.compile(
+    r"(?i)\b(answer-first|answer-firs|answer-fir|answe\w*|quick-answer|factory|no posts yet|create your first article|load more|showing\s+\d+)\b"
+)
+_FALLBACK_EXCERPT = "A practical wine guide from YAS Wine with clear tips for choosing, serving and enjoying wine."
+
+
+def _clean_card_excerpt(value: str) -> str:
+    out = _html_unescape_deep(value or "")
+    out = re.sub(r"<[^>]+>", " ", out)
+    out = re.sub(r"(?i)\b(?:short\s+)?answer\s*:\s*", "", out)
+    out = _BAD_EXCERPT_RE.sub("", out)
+    out = re.sub(r"\s+([.,;:!?])", r"\1", out)
+    out = re.sub(r"(?:^|\s)[.]+(?=\s|$)", " ", out)
+    out = re.sub(r"\s+", " ", out).strip(" -:|,;.")
+    if len(out) < 95 or _BAD_EXCERPT_RE.search(out):
+        out = _FALLBACK_EXCERPT
+    if len(out) > 180:
+        cut = out[:180]
+        pos = cut.rfind(" ")
+        if pos >= 95:
+            cut = cut[:pos]
+        out = cut.rstrip(" -:|,;.")
+    return out
+
+
 def upsert_blog_index_card(
     blog_dir: str,
     *,
@@ -730,9 +755,7 @@ def upsert_blog_index_card(
     title = _html_unescape_deep(title).strip()
     category = _html_unescape_deep(category).strip()
     description = _html_unescape_deep(description).strip()
-    excerpt = description.strip()
-    if len(excerpt) > 170:
-        excerpt = excerpt[:167].rstrip() + "..."
+    excerpt = _clean_card_excerpt(description)
 
     card = (
         f'\n            <a href="{href}" class="blog-card">\n'
