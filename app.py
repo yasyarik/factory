@@ -3933,6 +3933,56 @@ async def topic_autodiscovery_run(request: Request):
     return out
 
 
+
+def _internal_link_targets() -> list[dict[str, str]]:
+    posts = list_existing_posts(BLOG_DIR)
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for p in posts:
+        url = (p.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(p)
+
+    origin = _site_origin().rstrip("/")
+    with db_connect(DB_PATH) as conn:
+        rows = conn.execute(
+            """
+            SELECT slug, title, description, category, published_url
+            FROM jobs
+            WHERE status='PUBLISHED'
+              AND COALESCE(published_url, '') <> ''
+              AND (published_url LIKE '%/wine-countries/%' OR published_url LIKE '%/wine-regions/%')
+            ORDER BY updated_at DESC
+            """
+        ).fetchall()
+
+    for slug, title, description, category, published_url in rows:
+        rel = (published_url or '').strip()
+        if not rel:
+            continue
+        if rel.startswith(origin):
+            rel = rel[len(origin):]
+        rel = '/' + rel.lstrip('/')
+        if rel.endswith('.html'):
+            rel = rel[:-5]
+        if rel != '/' and not rel.endswith('/'):
+            rel += '/'
+        if rel in seen:
+            continue
+        seen.add(rel)
+        out.append({
+            'slug': (slug or '').strip(),
+            'url': rel,
+            'title': (title or slug or '').strip(),
+            'description': (description or '').strip(),
+            'category': (category or '').strip(),
+        })
+
+    return out
+
 @app.get("/api/posts")
 def list_posts():
     posts = list_existing_posts(BLOG_DIR)
@@ -4080,7 +4130,7 @@ def generate(job_id: str):
 
     log_event(DB_PATH, job_id, "INFO", "Status: GENERATING")
 
-    existing = list_existing_posts(BLOG_DIR)
+    existing = _internal_link_targets()
     draft = None
     problems: list[str] = []
 

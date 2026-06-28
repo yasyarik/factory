@@ -442,17 +442,21 @@ def render_post_html(
     src = _read(template_path)
 
     hero_file = os.path.basename(hero_image)
+    parent_dir = os.path.dirname(blog_dir)
+    parent_name = os.path.basename(parent_dir)
     hero_in_blog = os.path.join(blog_dir, hero_file)
-    hero_in_root = os.path.join(os.path.dirname(blog_dir), hero_file)
+    hero_in_root = os.path.join(parent_dir, hero_file)
+    hero_in_shared_blog = os.path.join(os.path.dirname(parent_dir), "blog", hero_file) if parent_name in {"ru", "es", "de", "fr"} else ""
     if hero_file and os.path.exists(hero_in_blog):
         image_placeholder = _prefer_webp_url(f"/blog/{hero_file}", blog_dir)
     elif hero_file and os.path.exists(hero_in_root):
         image_placeholder = _prefer_webp_url(f"/{hero_file}", blog_dir)
+    elif hero_file and hero_in_shared_blog and os.path.exists(hero_in_shared_blog):
+        image_placeholder = _prefer_webp_url(f"/blog/{hero_file}", os.path.join(os.path.dirname(parent_dir), "blog"))
     else:
-        m_first = re.search(r'<img\b[^>]*\bsrc=(?:"([^"]+)"|\'([^\']+)\')', content_html or "", flags=re.IGNORECASE)
+        m_first = re.search(r"<img\b[^>]*\bsrc=(?:\"([^\"]+)\"|'([^']+)')", content_html or "", flags=re.IGNORECASE)
         src = (m_first.group(1) or m_first.group(2) or "").strip() if m_first else ""
         image_placeholder = src if src else "/hero_ai.jpg"
-
     # PDF targets: title 55-60 chars, description 155-160 chars.
     meta_title = re.sub(r"\s+", " ", (title or "").strip())
     if len(meta_title) > 60:
