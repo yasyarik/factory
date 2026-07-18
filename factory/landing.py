@@ -436,7 +436,9 @@ def render_post_html(
     noindex: bool,
     toc_title: str = "On this page",
 ) -> str:
-    template_path = os.path.join(blog_dir, "template.html")
+    template_path = (os.environ.get("FACTORY_ARTICLE_TEMPLATE_PATH") or "").strip()
+    if not template_path or not os.path.exists(template_path):
+        template_path = os.path.join(blog_dir, "template.html")
     if not os.path.exists(template_path):
         template_path = os.path.join(os.path.dirname(os.path.dirname(blog_dir)), "blog", "template.html")
     src = _read(template_path)
